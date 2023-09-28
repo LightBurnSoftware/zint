@@ -31,6 +31,13 @@ jobs:
     steps:
     # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
     - uses: actions/checkout@v4
+    
+    - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+    - name: Fetch version info
+      run: python version.py
 
     - name: Install libpng-dev
       run: sudo apt-get install libpng-dev
@@ -64,14 +71,23 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         if-no-files-found: error
-        name: ubuntu
-        path: ${{runner.workspace}}/build/
+        name: ubuntu-v${{ env.lightburn_version }}
+        path: |
+          ${{runner.workspace}}/build/backend/libzint.a
+          ${{runner.workspace}}/build/backend/libzint.so
           
   build-windows-32bit:
     runs-on: windows-latest
 
     steps:
     - uses: actions/checkout@v4
+    
+    - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+    - name: Fetch version info
+      run: python version.py
 
     - name: Create Build Environment
       run: cmake -E make_directory ${{runner.workspace}}/build
@@ -95,14 +111,22 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         if-no-files-found: error
-        name: win32
-        path: ${{runner.workspace}}/build/
+        name: win32-v${{ env.lightburn_version }}
+        path: |
+          ${{runner.workspace}}/build/backend/Release/
 
   build-windows-64bit:
     runs-on: windows-latest
 
     steps:
     - uses: actions/checkout@v4
+    
+    - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+    - name: Fetch version info
+      run: python version.py
 
     - name: Create Build Environment
       run: cmake -E make_directory ${{runner.workspace}}/build
@@ -126,14 +150,22 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         if-no-files-found: error
-        name: win64
-        path: ${{runner.workspace}}/build/
+        name: win64-v${{ env.lightburn_version }}
+        path: |
+          ${{runner.workspace}}/build/backend/Release/
 
   build-macOS:
     runs-on: macOS-latest
 
     steps:
     - uses: actions/checkout@v4
+    
+    - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+    - name: Fetch version info
+      run: python version.py
 
     - name: Create Build Environment
       run: cmake -E make_directory ${{runner.workspace}}/build
@@ -157,14 +189,22 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         if-no-files-found: error
-        name: macos
-        path: ${{runner.workspace}}/build/
+        name: macos-v${{ env.lightburn_version }}
+        path: |
+          ${{runner.workspace}}/build/backend/libzint.*
 
   build-macOS-sanitize:
     runs-on: macOS-latest
 
     steps:
     - uses: actions/checkout@v4
+    
+    - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+    - name: Fetch version info
+      run: python version.py
 
     - name: Create Build Environment
       run: cmake -E make_directory ${{runner.workspace}}/build
@@ -188,5 +228,6 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         if-no-files-found: error
-        name: macos-sanitize
-        path: ${{runner.workspace}}/build/
+        name: macos-sanitize-v${{ env.lightburn_version }}
+        path: |
+          ${{runner.workspace}}/build/backend/libzint.*
