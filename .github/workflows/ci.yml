@@ -71,7 +71,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         if-no-files-found: error
-        name: ubuntu-v${{ env.lightburn_version }}
+        name: ubuntu-v${{ env.build_version }}
         path: |
           ${{runner.workspace}}/build/backend/libzint.a
           ${{runner.workspace}}/build/backend/libzint.so
@@ -111,7 +111,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         if-no-files-found: error
-        name: win32-v${{ env.lightburn_version }}
+        name: win32-v${{ env.build_version }}
         path: |
           ${{runner.workspace}}/build/backend/Release/
 
@@ -150,7 +150,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         if-no-files-found: error
-        name: win64-v${{ env.lightburn_version }}
+        name: win64-v${{ env.build_version }}
         path: |
           ${{runner.workspace}}/build/backend/Release/
 
@@ -189,7 +189,7 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         if-no-files-found: error
-        name: macos-v${{ env.lightburn_version }}
+        name: macos-v${{ env.build_version }}
         path: |
           ${{runner.workspace}}/build/backend/libzint.*
 
@@ -228,6 +228,6 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         if-no-files-found: error
-        name: macos-sanitize-v${{ env.lightburn_version }}
+        name: macos-sanitize-v${{ env.build_version }}
         path: |
           ${{runner.workspace}}/build/backend/libzint.*
