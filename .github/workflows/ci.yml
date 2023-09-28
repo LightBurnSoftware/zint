@@ -30,7 +30,7 @@ jobs:
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
     # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Install libpng-dev
       run: sudo apt-get install libpng-dev
@@ -71,7 +71,7 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Create Build Environment
       run: cmake -E make_directory ${{runner.workspace}}/build
@@ -90,12 +90,19 @@ jobs:
       working-directory: ${{runner.workspace}}/build
       shell: bash
       run: PATH=$PATH:"$(pwd)/backend/Release:$(pwd)/frontend/Release" ctest -V -C $BUILD_TYPE
+      
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v3
+      with:
+        if-no-files-found: error
+        name: win32
+        path: ${{runner.workspace}}/build/
 
   build-windows-64bit:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Create Build Environment
       run: cmake -E make_directory ${{runner.workspace}}/build
@@ -114,12 +121,19 @@ jobs:
       working-directory: ${{runner.workspace}}/build
       shell: bash
       run: PATH=$PATH:"$(pwd)/backend/Release:$(pwd)/frontend/Release" ctest -V -C $BUILD_TYPE
+      
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v3
+      with:
+        if-no-files-found: error
+        name: win64
+        path: ${{runner.workspace}}/build/
 
   build-macOS:
     runs-on: macOS-latest
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Create Build Environment
       run: cmake -E make_directory ${{runner.workspace}}/build
@@ -138,12 +152,19 @@ jobs:
       working-directory: ${{runner.workspace}}/build
       shell: bash
       run: LD_LIBRARY_PATH=$LD_LIBRARY_PATH:"$(pwd)/backend" PATH=$PATH:"$(pwd)/frontend" ctest -V -C $BUILD_TYPE
+      
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v3
+      with:
+        if-no-files-found: error
+        name: macos
+        path: ${{runner.workspace}}/build/
 
   build-macOS-sanitize:
     runs-on: macOS-latest
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Create Build Environment
       run: cmake -E make_directory ${{runner.workspace}}/build
@@ -162,3 +183,10 @@ jobs:
       working-directory: ${{runner.workspace}}/build
       shell: bash
       run: LD_LIBRARY_PATH=$LD_LIBRARY_PATH:"$(pwd)/backend" PATH=$PATH:"$(pwd)/frontend" ctest -V -C $BUILD_TYPE
+      
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v3
+      with:
+        if-no-files-found: error
+        name: macos-sanitize
+        path: ${{runner.workspace}}/build/
