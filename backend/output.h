@@ -1,7 +1,7 @@
 /*  output.h - Common routines for raster/vector */
 /*
     libzint - the open source barcode library
-    Copyright (C) 2020-2023 Robin Stuart <rstuart114@gmail.com>
+    Copyright (C) 2020-2024 Robin Stuart <rstuart114@gmail.com>
 
     Redistribution and use in source and binary forms, with or without
     modification, are permitted provided that the following conditions
@@ -49,24 +49,25 @@ INTERNAL int out_colour_get_rgb(const char *colour, unsigned char *red, unsigned
 INTERNAL int out_colour_get_cmyk(const char *colour, int *cyan, int *magenta, int *yellow, int *black,
                 unsigned char *rgb_alpha);
 
-/* Set left (x), top (y), right and bottom offsets for whitespace */
+/* Convert internal colour chars "WCBMRYGK" to RGB */
+INTERNAL int out_colour_char_to_rgb(const char ch, unsigned char *red, unsigned char *green, unsigned char *blue);
+
+/* Set left (x), top (y), right and bottom offsets for whitespace, also right quiet zone */
 INTERNAL void out_set_whitespace_offsets(const struct zint_symbol *symbol, const int hide_text,
-                const int comp_xoffset, float *xoffset, float *yoffset, float *roffset, float *boffset,
-                const float scaler, int *xoffset_si, int *yoffset_si, int *roffset_si, int *boffset_si);
+                const int comp_xoffset, float *p_xoffset, float *p_yoffset, float *p_roffset, float *p_boffset,
+                float *p_qz_right, const float scaler, int *p_xoffset_si, int *p_yoffset_si, int *p_roffset_si,
+                int *p_boffset_si, int *p_qz_right_si);
 
 /* Set composite offset and main width excluding add-on (for start of add-on calc) and add-on text, returning
-   UPC/EAN type */
+   EAN/UPC type */
 INTERNAL int out_process_upcean(const struct zint_symbol *symbol, const int comp_xoffset, int *p_main_width,
-                unsigned char addon[6], int *p_addon_gap);
+                unsigned char addon[6], int *p_addon_len, int *p_addon_gap);
 
 /* Calculate large bar height i.e. linear bars with zero row height that respond to the symbol height.
    If scaler `si` non-zero (raster), then large_bar_height if non-zero or else row heights will be rounded
    to nearest pixel and symbol height adjusted */
 INTERNAL float out_large_bar_height(struct zint_symbol *symbol, const int si, int *row_heights_si,
                 int *symbol_height_si);
-
-/* Split UPC/EAN add-on text into various constituents */
-INTERNAL void out_upcean_split_text(const int upceanflag, const unsigned char text[], unsigned char textparts[4][7]);
 
 /* Create output file, creating sub-directories if necessary. Returns `fopen()` FILE pointer */
 INTERNAL FILE *out_fopen(const char filename[256], const char *mode);
@@ -76,8 +77,48 @@ INTERNAL FILE *out_fopen(const char filename[256], const char *mode);
 INTERNAL FILE *out_win_fopen(const char *filename, const char *mode);
 #endif
 
-/* Output float without trailing zeroes to `fp` with decimal pts `dp` (precision) */
-INTERNAL void out_putsf(const char *const prefix, const int dp, const float arg, FILE *fp);
+/* Little-endian output */
+#define out_le_u16(b, n) do { \
+        unsigned char *bp = (unsigned char *) &(b); \
+        uint16_t u16 = (uint16_t) (n); \
+        bp[0] = (unsigned char) (u16 & 0xFF); \
+        bp[1] = (unsigned char) ((u16 >> 8) & 0xFF); \
+    } while (0)
+
+#define out_le_u32(b, n) do { \
+        unsigned char *bp = (unsigned char *) &(b); \
+        uint32_t u32 = (uint32_t) (n); \
+        bp[0] = (unsigned char) (u32 & 0xFF); \
+        bp[1] = (unsigned char) ((u32 >> 8) & 0xFF); \
+        bp[2] = (unsigned char) ((u32 >> 16) & 0xFF); \
+        bp[3] = (unsigned char) ((u32 >> 24) & 0xFF); \
+    } while (0)
+
+#define out_le_i32(b, n) do { \
+        unsigned char *bp = (unsigned char *) &(b); \
+        int32_t i32 = (int32_t) (n); \
+        bp[0] = (unsigned char) (i32 & 0xFF); \
+        bp[1] = (unsigned char) ((i32 >> 8) & 0xFF); \
+        bp[2] = (unsigned char) ((i32 >> 16) & 0xFF); \
+        bp[3] = (unsigned char) ((i32 >> 24) & 0xFF); \
+    } while (0)
+
+#define out_le_float(b, n) do { \
+        unsigned char *bp = (unsigned char *) &(b); \
+        float f = (float) (n); \
+        uint32_t *p_u32 = (uint32_t *) &f; \
+        bp[0] = (unsigned char) (*p_u32 & 0xFF); \
+        bp[1] = (unsigned char) ((*p_u32 >> 8) & 0xFF); \
+        bp[2] = (unsigned char) ((*p_u32 >> 16) & 0xFF); \
+        bp[3] = (unsigned char) ((*p_u32 >> 24) & 0xFF); \
+    } while (0)
+
+/* For more portability, use `#pragma pack()` pair for MSCV, per-type packed attribute otherwise */
+#ifdef _MSC_VER
+#  define OUT_PACK
+#else
+#  define OUT_PACK __attribute__((__packed__))
+#endif
 
 #ifdef __cplusplus
 }

@@ -1,7 +1,7 @@
 /* raster.c - Handles output to raster files */
 /*
     libzint - the open source barcode library
-    Copyright (C) 2009-2023 Robin Stuart <rstuart114@gmail.com>
+    Copyright (C) 2009-2024 Robin Stuart <rstuart114@gmail.com>
 
     Redistribution and use in source and binary forms, with or without
     modification, are permitted provided that the following conditions
@@ -47,7 +47,11 @@
 #define DEFAULT_INK     '1' /* Black */
 #define DEFAULT_PAPER   '0' /* White */
 
-#define UPCEAN_TEXT     1   /* Helper flag for `draw_string()`/`draw_letter()` to indicate dealing with UPC/EAN */
+/* Flags for `draw_string()`/`draw_letter()` */
+#define ZFONT_HALIGN_CENTRE 0
+#define ZFONT_HALIGN_LEFT   1
+#define ZFONT_HALIGN_RIGHT  2
+#define ZFONT_UPCEAN_TEXT   4   /* Helper flag to indicate dealing with EAN/UPC */
 
 #ifndef ZINT_NO_PNG
 INTERNAL int png_pixel_plot(struct zint_symbol *symbol, const unsigned char *pixelbuf);
@@ -58,6 +62,17 @@ INTERNAL int gif_pixel_plot(struct zint_symbol *symbol, const unsigned char *pix
 INTERNAL int tif_pixel_plot(struct zint_symbol *symbol, const unsigned char *pixelbuf);
 
 static const char ultra_colour[] = "0CBMRYGKW";
+
+/* Wrapper to pre-check `size` on `malloc()` isn't too big (`size2` given if doing X `malloc()`s in a row) */
+static void *raster_malloc(size_t size, size_t size2) {
+    /* Check for large image `malloc`s, which produce very large files most systems can't handle anyway */
+    /* Also `malloc()` on Linux will (usually) succeed regardless of request, and then get untrappably killed on
+       access by OOM killer if too much, so this is a crude mitigation */
+    if (size + size2 > 0x40000000) { /* 1GB */
+        return NULL;
+    }
+    return malloc(size);
+}
 
 static int buffer_plot(struct zint_symbol *symbol, const unsigned char *pixelbuf) {
     /* Place pixelbuffer into symbol */
@@ -76,6 +91,7 @@ static int buffer_plot(struct zint_symbol *symbol, const unsigned char *pixelbuf
     int row;
     int plot_alpha = 0;
     const size_t bm_bitmap_width = (size_t) symbol->bitmap_width * 3;
+    const size_t bm_bitmap_size = bm_bitmap_width * symbol->bitmap_height;
 
     if (out_colour_get_rgb(symbol->fgcolour, &map[DEFAULT_INK][0], &map[DEFAULT_INK][1], &map[DEFAULT_INK][2],
             &alpha[0])) {
@@ -96,27 +112,28 @@ static int buffer_plot(struct zint_symbol *symbol, const unsigned char *pixelbuf
         symbol->alphamap = NULL;
     }
 
-    symbol->bitmap = (unsigned char *) malloc(bm_bitmap_width * symbol->bitmap_height);
+    symbol->bitmap = (unsigned char *) raster_malloc(bm_bitmap_size, 0);
     if (symbol->bitmap == NULL) {
         strcpy(symbol->errtxt, "661: Insufficient memory for bitmap buffer");
         return ZINT_ERROR_MEMORY;
     }
 
     if (plot_alpha) {
-        symbol->alphamap = (unsigned char *) malloc((size_t) symbol->bitmap_width * symbol->bitmap_height);
+        const size_t alpha_size = (size_t) symbol->bitmap_width * symbol->bitmap_height;
+        symbol->alphamap = (unsigned char *) raster_malloc(alpha_size, bm_bitmap_size);
         if (symbol->alphamap == NULL) {
             strcpy(symbol->errtxt, "662: Insufficient memory for alphamap buffer");
             return ZINT_ERROR_MEMORY;
         }
         for (row = 0; row < symbol->bitmap_height; row++) {
-            int p = row * symbol->bitmap_width;
+            size_t p = (size_t) symbol->bitmap_width * row;
             const unsigned char *pb = pixelbuf + p;
             unsigned char *bitmap = symbol->bitmap + p * 3;
             if (row && memcmp(pb, pb - symbol->bitmap_width, symbol->bitmap_width) == 0) {
                 memcpy(bitmap, bitmap - bm_bitmap_width, bm_bitmap_width);
                 memcpy(symbol->alphamap + p, symbol->alphamap + p - symbol->bitmap_width, symbol->bitmap_width);
             } else {
-                const int pe = p + symbol->bitmap_width;
+                const size_t pe = p + symbol->bitmap_width;
                 for (; p < pe; p++, bitmap += 3) {
                     memcpy(bitmap, map[pixelbuf[p]], 3);
                     symbol->alphamap[p] = alpha[pixelbuf[p] == DEFAULT_PAPER];
@@ -125,7 +142,7 @@ static int buffer_plot(struct zint_symbol *symbol, const unsigned char *pixelbuf
         }
     } else {
         for (row = 0; row < symbol->bitmap_height; row++) {
-            const int r = row * symbol->bitmap_width;
+            const size_t r = (size_t) symbol->bitmap_width * row;
             const unsigned char *pb = pixelbuf + r;
             unsigned char *bitmap = symbol->bitmap + r * 3;
             if (row && memcmp(pb, pb - symbol->bitmap_width, symbol->bitmap_width) == 0) {
@@ -165,7 +182,7 @@ static int save_raster_image_to_file(struct zint_symbol *symbol, const int image
     }
 
     if (rotate_angle) {
-        if (!(rotated_pixbuf = (unsigned char *) malloc((size_t) image_width * image_height))) {
+        if (!(rotated_pixbuf = (unsigned char *) raster_malloc((size_t) image_width * image_height, 0 /*size2*/))) {
             strcpy(symbol->errtxt, "650: Insufficient memory for pixel buffer");
             return ZINT_ERROR_MEMORY;
         }
@@ -178,25 +195,28 @@ static int save_raster_image_to_file(struct zint_symbol *symbol, const int image
             break;
         case 90: /* Plot 90 degrees clockwise */
             for (row = 0; row < image_width; row++) {
+                const size_t h_offset = (size_t) image_height * row;
                 for (column = 0; column < image_height; column++) {
-                    rotated_pixbuf[(row * image_height) + column] =
-                            *(pixelbuf + (image_width * (image_height - column - 1)) + row);
+                    const size_t w_offset = (size_t) image_width * (image_height - column - 1);
+                    rotated_pixbuf[h_offset + column] = *(pixelbuf + w_offset + row);
                 }
             }
             break;
         case 180: /* Plot upside down */
             for (row = 0; row < image_height; row++) {
+                const size_t w_offset = (size_t) image_width * row;
+                const size_t wh_offset = (size_t) image_width * (image_height - row - 1);
                 for (column = 0; column < image_width; column++) {
-                    rotated_pixbuf[(row * image_width) + column] =
-                            *(pixelbuf + (image_width * (image_height - row - 1)) + (image_width - column - 1));
+                    rotated_pixbuf[w_offset + column] = *(pixelbuf + wh_offset + (image_width - column - 1));
                 }
             }
             break;
         case 270: /* Plot 90 degrees anti-clockwise */
             for (row = 0; row < image_width; row++) {
+                const size_t h_offset = (size_t) image_height * row;
                 for (column = 0; column < image_height; column++) {
-                    rotated_pixbuf[(row * image_height) + column] =
-                            *(pixelbuf + (image_width * column) + (image_width - row - 1));
+                    const size_t w_offset = (size_t) image_width * column;
+                    rotated_pixbuf[h_offset + column] = *(pixelbuf + w_offset + (image_width - row - 1));
                 }
             }
             break;
@@ -224,12 +244,14 @@ static int save_raster_image_to_file(struct zint_symbol *symbol, const int image
 #ifndef ZINT_NO_PNG
             error_number = png_pixel_plot(symbol, rotated_pixbuf);
 #else
-            if (rotate_angle) {
-                free(rotated_pixbuf);
-            }
-            return ZINT_ERROR_INVALID_OPTION;
+            error_number = ZINT_ERROR_INVALID_OPTION;
 #endif
             break;
+#if defined(__GNUC__) && !defined(__clang__) && defined(NDEBUG) && defined(ZINT_NO_PNG)
+/* Suppress gcc warning ‘<unknown>’ may be used uninitialized - only when Release and ZINT_NO_PNG */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
         case OUT_PCX_FILE:
             error_number = pcx_pixel_plot(symbol, rotated_pixbuf);
             break;
@@ -242,6 +264,9 @@ static int save_raster_image_to_file(struct zint_symbol *symbol, const int image
         default:
             error_number = bmp_pixel_plot(symbol, rotated_pixbuf);
             break;
+#if defined(__GNUC__) && !defined(__clang__) && defined(NDEBUG) && defined(ZINT_NO_PNG)
+#pragma GCC diagnostic pop
+#endif
     }
 
     if (rotate_angle) {
@@ -260,7 +285,7 @@ static void draw_pt(unsigned char *buf, const int buf_width, const int buf_heigh
 
 /* Draw the first line of a bar, to be completed by `copy_bar_line()`; more performant than multiple `draw_bar()`s */
 static void draw_bar_line(unsigned char *pixelbuf, const int xpos, const int xlen, const int ypos,
-            const int image_width, const char fill) {
+            const int image_width, const int fill) {
     unsigned char *pb = pixelbuf + ((size_t) image_width * ypos) + xpos;
 
     memset(pb, fill, xlen);
@@ -282,7 +307,7 @@ static void copy_bar_line(unsigned char *pixelbuf, const int xpos, const int xle
 
 /* Draw a rectangle */
 static void draw_bar(unsigned char *pixelbuf, const int xpos, const int xlen, const int ypos, const int ylen,
-            const int image_width, const int image_height, const char fill) {
+            const int image_width, const int image_height, const int fill) {
     int y;
     const int ye = ypos + ylen > image_height ? image_height : ypos + ylen; /* Defensive, should never happen */
     unsigned char *pb = pixelbuf + ((size_t) image_width * ypos) + xpos;
@@ -306,7 +331,7 @@ static void draw_letter(unsigned char *pixelbuf, const unsigned char letter, int
     int font_y;
     int half_si;
     int odd_si;
-    unsigned char *linePtr, *maxPtr;
+    unsigned char *linePtr;
     int x_start = 0;
 
     if (letter < 33) {
@@ -330,7 +355,7 @@ static void draw_letter(unsigned char *pixelbuf, const unsigned char letter, int
         glyph_no = letter - 33;
     }
 
-    if (textflags & UPCEAN_TEXT) { /* Needs to be before SMALL_TEXT check */
+    if (textflags & ZFONT_UPCEAN_TEXT) { /* Needs to be before SMALL_TEXT check */
         /* No bold for UPCEAN */
         if (textflags & SMALL_TEXT) {
             font_table = upcean_small_font;
@@ -375,8 +400,8 @@ static void draw_letter(unsigned char *pixelbuf, const unsigned char letter, int
         unsigned char *pixelPtr = linePtr; /* Avoid warning */
         for (y_si = 0; y_si < half_si; y_si++) {
             int extra_dot = 0;
+            unsigned char *const maxPtr = linePtr + image_width - xposn;
             pixelPtr = linePtr;
-            maxPtr = linePtr + image_width - xposn;
             for (x = x_start; x < max_x && pixelPtr < maxPtr; x++) {
                 unsigned set = font_table[font_y + y] & (glyph_mask >> x);
                 for (x_si = 0; x_si < half_si && pixelPtr < maxPtr; x_si++) {
@@ -409,12 +434,13 @@ static void draw_letter(unsigned char *pixelbuf, const unsigned char letter, int
 }
 
 /* Plot a string into the pixel buffer */
-static void draw_string(unsigned char *pixbuf, const unsigned char input_string[], const int xposn, const int yposn,
-            const int textflags, const int image_width, const int image_height, const int si) {
-    int i, string_length, string_left_hand, letter_width, letter_gap;
-    int half_si = si / 2, odd_si = si & 1, x_incr;
+static void draw_string(unsigned char *pixelbuf, const unsigned char input_string[], int length, const int xposn,
+            const int yposn, const int textflags, const int image_width, const int image_height, const int si) {
+    int i, string_left_hand, letter_width, letter_gap;
+    const int half_si = si / 2, odd_si = si & 1;
+    int x_incr;
 
-    if (textflags & UPCEAN_TEXT) { /* Needs to be before SMALL_TEXT check */
+    if (textflags & ZFONT_UPCEAN_TEXT) { /* Needs to be before SMALL_TEXT check */
         /* No bold for UPCEAN */
         letter_width = textflags & SMALL_TEXT ? UPCEAN_SMALL_FONT_WIDTH : UPCEAN_FONT_WIDTH;
         letter_gap = 4;
@@ -431,18 +457,26 @@ static void draw_string(unsigned char *pixbuf, const unsigned char input_string[
     }
     letter_width += letter_gap;
 
-    string_length = (int) ustrlen(input_string);
-
-    string_left_hand = xposn - ((letter_width * string_length - letter_gap) * half_si) / 2;
-    if (odd_si) {
-        string_left_hand -= (letter_width * string_length - letter_gap) / 4;
+    if (length == -1) {
+        length = (int) ustrlen(input_string);
     }
-    for (i = 0; i < string_length; i++) {
+
+    if (textflags & ZFONT_HALIGN_LEFT) {
+        string_left_hand = xposn;
+    } else if (textflags & ZFONT_HALIGN_RIGHT) {
+        string_left_hand = xposn - ((letter_width * length - letter_gap) * half_si);
+    } else {
+        string_left_hand = xposn - (int) roundf(((letter_width * length - letter_gap) * half_si) / 2.0f);
+    }
+    if (odd_si) {
+        string_left_hand -= (letter_width * length - letter_gap) / 4;
+    }
+    for (i = 0; i < length; i++) {
         x_incr = i * letter_width * half_si;
         if (odd_si) {
             x_incr += i * letter_width / 2;
         }
-        draw_letter(pixbuf, input_string[i], string_left_hand + x_incr, yposn, textflags, image_width, image_height,
+        draw_letter(pixelbuf, input_string[i], string_left_hand + x_incr, yposn, textflags, image_width, image_height,
                     si);
     }
 }
@@ -647,7 +681,8 @@ static void plot_hexagon(unsigned char *scaled_hexagon, const int hex_width, con
 /* Draw binding or box */
 static void draw_bind_box(const struct zint_symbol *symbol, unsigned char *pixelbuf,
             const int xoffset_si, const int yoffset_si, const int symbol_height_si, const int dot_overspill_si,
-            const int image_width, const int image_height, const int si) {
+            const int upceanflag, const int textoffset_si, const int image_width, const int image_height,
+            const int si) {
     if (symbol->border_width > 0 && (symbol->output_options & (BARCODE_BOX | BARCODE_BIND | BARCODE_BIND_TOP))) {
         const int no_extend = symbol->symbology == BARCODE_CODABLOCKF || symbol->symbology == BARCODE_HIBC_BLOCKF
                                 || symbol->symbology == BARCODE_DPD;
@@ -658,6 +693,9 @@ static void draw_bind_box(const struct zint_symbol *symbol, unsigned char *pixel
         if (horz_outside) {
             ybind_top = 0;
             ybind_bot = image_height - bwidth_si;
+        } else if (upceanflag == 2 || upceanflag == 5) {
+            ybind_top += textoffset_si;
+            ybind_bot += textoffset_si;
         }
         /* Horizontal boundary bars */
         if ((symbol->output_options & BARCODE_BOX) || !no_extend) {
@@ -683,6 +721,8 @@ static void draw_bind_box(const struct zint_symbol *symbol, unsigned char *pixel
             if (horz_outside) {
                 box_top = bwidth_si;
                 box_height = image_height - bwidth_si * 2;
+            } else if (upceanflag == 2 || upceanflag == 5) {
+                box_top += textoffset_si;
             }
             draw_bar(pixelbuf, 0, bwidth_si, box_top, box_height, image_width, image_height, DEFAULT_INK);
             draw_bar(pixelbuf, xbox_right, bwidth_si, box_top, box_height, image_width, image_height, DEFAULT_INK);
@@ -694,12 +734,14 @@ static void draw_bind_box(const struct zint_symbol *symbol, unsigned char *pixel
 static int plot_raster_maxicode(struct zint_symbol *symbol, const int rotate_angle, const int file_type) {
     int row, column;
     int image_height, image_width;
+    size_t image_size;
     unsigned char *pixelbuf;
     int error_number;
     float xoffset, yoffset, roffset, boffset;
     float scaler = symbol->scale;
     unsigned char *scaled_hexagon;
     int hex_width, hex_height;
+    size_t hex_size;
     int hx_start, hy_start, hx_end, hy_end;
     int hex_image_width, hex_image_height;
     int yposn_offset;
@@ -714,7 +756,7 @@ static int plot_raster_maxicode(struct zint_symbol *symbol, const int rotate_ang
     scaler *= 10.0f;
 
     out_set_whitespace_offsets(symbol, 0 /*hide_text*/, 0 /*comp_xoffset*/, &xoffset, &yoffset, &roffset, &boffset,
-        scaler, &xoffset_si, &yoffset_si, &roffset_si, &boffset_si);
+        NULL /*qz_right*/, scaler, &xoffset_si, &yoffset_si, &roffset_si, &boffset_si, NULL /*qz_right_si*/);
 
     hex_width = (int) roundf(scaler); /* Short diameter, X in ISO/IEC 16023:2000 Figure 8 (same as W) */
     hex_height = (int) roundf(scaler * two_div_sqrt3); /* Long diameter, V in Figure 8 */
@@ -739,19 +781,21 @@ static int plot_raster_maxicode(struct zint_symbol *symbol, const int rotate_ang
     image_width = (int) ceilf(hex_image_width + xoffset_si + roffset_si);
     image_height = (int) ceilf(hex_image_height + yoffset_si + boffset_si);
     assert(image_width && image_height);
+    image_size = (size_t) image_width * image_height;
 
-    if (!(pixelbuf = (unsigned char *) malloc((size_t) image_width * image_height))) {
+    if (!(pixelbuf = (unsigned char *) raster_malloc(image_size, 0 /*size*/))) {
         strcpy(symbol->errtxt, "655: Insufficient memory for pixel buffer");
         return ZINT_ERROR_MEMORY;
     }
-    memset(pixelbuf, DEFAULT_PAPER, (size_t) image_width * image_height);
+    memset(pixelbuf, DEFAULT_PAPER, image_size);
 
-    if (!(scaled_hexagon = (unsigned char *) malloc((size_t) hex_width * hex_height))) {
+    hex_size = (size_t) hex_width * hex_height;
+    if (!(scaled_hexagon = (unsigned char *) raster_malloc(hex_size, image_size))) {
         strcpy(symbol->errtxt, "656: Insufficient memory for pixel buffer");
         free(pixelbuf);
         return ZINT_ERROR_MEMORY;
     }
-    memset(scaled_hexagon, DEFAULT_PAPER, (size_t) hex_width * hex_height);
+    memset(scaled_hexagon, DEFAULT_PAPER, hex_size);
 
     plot_hexagon(scaled_hexagon, hex_width, hex_height, hx_start, hy_start, hx_end, hy_end);
 
@@ -772,7 +816,7 @@ static int plot_raster_maxicode(struct zint_symbol *symbol, const int rotate_ang
                 xoffset_si, yoffset_si);
 
     draw_bind_box(symbol, pixelbuf, xoffset_si, yoffset_si, hex_image_height, 0 /*dot_overspill_si*/,
-                image_width, image_height, (int) scaler);
+                0 /*upceanflag*/, 0 /*textoffset_si*/, image_width, image_height, (int) scaler);
 
     error_number = save_raster_image_to_file(symbol, image_height, image_width, pixelbuf, rotate_angle, file_type);
     free(scaled_hexagon);
@@ -781,8 +825,10 @@ static int plot_raster_maxicode(struct zint_symbol *symbol, const int rotate_ang
     }
     if (error_number == 0) {
         /* Check whether size is compliant */
+        const float min_ratio = 0.92993629f; /* 24.82 / 26.69 */
+        const float max_ratio = 1.177984f; /* 27.93 / 23.71 */
         const float size_ratio = (float) hex_image_width / hex_image_height;
-        if (size_ratio < 24.82f / 26.69f || size_ratio > 27.93f / 23.71f) {
+        if (size_ratio < min_ratio || size_ratio > max_ratio) {
             strcpy(symbol->errtxt, "663: Size not within the minimum/maximum ranges");
             error_number = ZINT_WARN_NONCOMPLIANT;
         }
@@ -795,6 +841,7 @@ static int plot_raster_dotty(struct zint_symbol *symbol, const int rotate_angle,
     unsigned char *scaled_pixelbuf;
     int r, i;
     int scale_width, scale_height;
+    size_t scale_size;
     int error_number = 0;
     float xoffset, yoffset, roffset, boffset;
     float dot_offset_s;
@@ -812,7 +859,7 @@ static int plot_raster_dotty(struct zint_symbol *symbol, const int rotate_angle,
     dot_radius_si = (int) dot_radius_s;
 
     out_set_whitespace_offsets(symbol, 0 /*hide_text*/, 0 /*comp_xoffset*/, &xoffset, &yoffset, &roffset, &boffset,
-        scaler, &xoffset_si, &yoffset_si, &roffset_si, &boffset_si);
+        NULL /*qz_right*/, scaler, &xoffset_si, &yoffset_si, &roffset_si, &boffset_si, NULL /*qz_right_si*/);
 
     /* TODO: Revisit this overspill stuff, it's hacky */
     if (symbol->dot_size < 1.0f) {
@@ -829,13 +876,14 @@ static int plot_raster_dotty(struct zint_symbol *symbol, const int rotate_angle,
 
     scale_width = (int) (symbol->width * scaler + xoffset_si + roffset_si + dot_overspill_si);
     scale_height = (int) (symbol_height_si + yoffset_si + boffset_si + dot_overspill_si);
+    scale_size = (size_t) scale_width * scale_height;
 
-    /* Apply scale options by creating another pixel buffer */
-    if (!(scaled_pixelbuf = (unsigned char *) malloc((size_t) scale_width * scale_height))) {
+    /* Apply scale options by creating pixel buffer */
+    if (!(scaled_pixelbuf = (unsigned char *) raster_malloc(scale_size, 0 /*size2*/))) {
         strcpy(symbol->errtxt, "657: Insufficient memory for pixel buffer");
         return ZINT_ERROR_MEMORY;
     }
-    memset(scaled_pixelbuf, DEFAULT_PAPER, (size_t) scale_width * scale_height);
+    memset(scaled_pixelbuf, DEFAULT_PAPER, scale_size);
 
     /* Plot the body of the symbol to the pixel buffer */
     for (r = 0; r < symbol->rows; r++) {
@@ -850,7 +898,7 @@ static int plot_raster_dotty(struct zint_symbol *symbol, const int rotate_angle,
     }
 
     draw_bind_box(symbol, scaled_pixelbuf, xoffset_si, yoffset_si, symbol_height_si, dot_overspill_si,
-                scale_width, scale_height, (int) scaler);
+                0 /*upceanflag*/, 0 /*textoffset_si*/, scale_width, scale_height, (int) scaler);
 
     error_number = save_raster_image_to_file(symbol, scale_height, scale_width, scaled_pixelbuf, rotate_angle,
                                             file_type);
@@ -905,29 +953,29 @@ static int plot_raster_default(struct zint_symbol *symbol, const int rotate_angl
     int main_width;
     int comp_xoffset = 0;
     unsigned char addon[6];
+    int addon_len = 0;
     int addon_gap = 0;
     float addon_text_yposn = 0.0f;
     float xoffset, yoffset, roffset, boffset;
     float textoffset;
     int upceanflag = 0;
     int addon_latch = 0;
-    unsigned char textparts[4][7];
     int hide_text;
     int i, r;
     int block_width = 0;
     int font_height; /* Font pixel size (so whole integers) */
-    float text_gap; /* Gap between barcode and text */
     float guard_descent;
     const int upcean_guard_whitespace = !(symbol->output_options & BARCODE_NO_QUIET_ZONES)
                                         && (symbol->output_options & EANUPC_GUARD_WHITESPACE);
     const int is_codablockf = symbol->symbology == BARCODE_CODABLOCKF || symbol->symbology == BARCODE_HIBC_BLOCKF;
 
     int textflags = 0;
-    int xoffset_si, yoffset_si, roffset_si, boffset_si;
-    int comp_xoffset_si;
+    int xoffset_si, yoffset_si, roffset_si, boffset_si, qz_right_si;
+    int xoffset_comp_si;
     int row_heights_si[200];
     int symbol_height_si;
     int image_width, image_height;
+    size_t image_size;
     unsigned char *pixelbuf;
     float scaler = symbol->scale;
     int si;
@@ -955,28 +1003,28 @@ static int plot_raster_default(struct zint_symbol *symbol, const int rotate_angl
             comp_xoffset++;
         }
     }
-    if (is_extendable(symbol->symbology)) {
-        upceanflag = out_process_upcean(symbol, comp_xoffset, &main_width, addon, &addon_gap);
+    if (is_upcean(symbol->symbology)) {
+        upceanflag = out_process_upcean(symbol, comp_xoffset, &main_width, addon, &addon_len, &addon_gap);
     }
 
     hide_text = ((!symbol->show_hrt) || (ustrlen(symbol->text) == 0) || scaler < 1.0f);
 
-    out_set_whitespace_offsets(symbol, hide_text, comp_xoffset, &xoffset, &yoffset, &roffset, &boffset, si,
-        &xoffset_si, &yoffset_si, &roffset_si, &boffset_si);
+    out_set_whitespace_offsets(symbol, hide_text, comp_xoffset, &xoffset, &yoffset, &roffset, &boffset,
+        NULL /*qz_right*/, si, &xoffset_si, &yoffset_si, &roffset_si, &boffset_si, &qz_right_si);
 
-    comp_xoffset_si = xoffset_si + comp_xoffset * si;
+    xoffset_comp_si = xoffset_si + comp_xoffset * si;
+
+    image_width = symbol->width * si + xoffset_si + roffset_si;
 
     /* Note font sizes halved as in pixels */
     if (upceanflag) {
-        textflags = UPCEAN_TEXT | (symbol->output_options & SMALL_TEXT); /* Bold not available for UPC/EAN */
+        textflags = ZFONT_UPCEAN_TEXT | (symbol->output_options & SMALL_TEXT); /* Bold not available for EAN/UPC */
         font_height = (UPCEAN_FONT_HEIGHT + 1) / 2;
-        text_gap = symbol->text_gap ? symbol->text_gap : 1.0f;
         /* Height of guard bar descent (none for EAN-2 and EAN-5) */
         guard_descent = upceanflag >= 6 ? symbol->guard_descent : 0.0f;
     } else {
         textflags = symbol->output_options & (SMALL_TEXT | BOLD_TEXT);
         font_height = textflags & SMALL_TEXT ? (SMALL_FONT_HEIGHT + 1) / 2 : (NORMAL_FONT_HEIGHT + 1) / 2;
-        text_gap = symbol->text_gap ? symbol->text_gap : 1.0f;
         guard_descent = 0.0f;
     }
 
@@ -984,24 +1032,24 @@ static int plot_raster_default(struct zint_symbol *symbol, const int rotate_angl
         textoffset = guard_descent;
     } else {
         if (upceanflag) {
-            textoffset = font_height + text_gap;
+            textoffset = font_height + symbol->text_gap;
             if (textoffset < guard_descent) {
                 textoffset = guard_descent;
             }
         } else {
-            textoffset = font_height + text_gap;
+            textoffset = font_height + symbol->text_gap;
         }
     }
 
-    image_width = symbol->width * si + xoffset_si + roffset_si;
-    image_height = symbol_height_si + textoffset * si + yoffset_si + boffset_si;
+    image_height = symbol_height_si + (int) ceilf(textoffset * si) + yoffset_si + boffset_si;
     assert(image_width && image_height);
+    image_size = (size_t) image_width * image_height;
 
-    if (!(pixelbuf = (unsigned char *) malloc((size_t) image_width * image_height))) {
+    if (!(pixelbuf = (unsigned char *) raster_malloc(image_size, 0 /*size2*/))) {
         strcpy(symbol->errtxt, "658: Insufficient memory for pixel buffer");
         return ZINT_ERROR_MEMORY;
     }
-    memset(pixelbuf, DEFAULT_PAPER, (size_t) image_width * image_height);
+    memset(pixelbuf, DEFAULT_PAPER, image_size);
 
     yposn_si = yoffset_si;
 
@@ -1035,12 +1083,12 @@ static int plot_raster_default(struct zint_symbol *symbol, const int rotate_angl
                                         && module_is_set(symbol, r, i + block_width) == fill; block_width++);
                 if ((r == (symbol->rows - 1)) && (i > main_width) && (addon_latch == 0)) {
                     int addon_row_height_si;
-                    const int text_offset_si = (font_height + text_gap) * si;
+                    const int addon_row_adj_si = (int) ceilf((font_height + symbol->text_gap) * si);
                     copy_bar_line(pixelbuf, xoffset_si, main_width * si, yposn_si, row_height_si, image_width,
                                 image_height);
                     addon_text_yposn = yposn_si;
-                    yposn_si += text_offset_si;
-                    addon_row_height_si = row_height_si - text_offset_si;
+                    yposn_si += addon_row_adj_si;
+                    addon_row_height_si = row_height_si - addon_row_adj_si;
                     if (upceanflag != 12 && upceanflag != 6) { /* UPC-A/E add-ons don't descend */
                         addon_row_height_si += guard_descent * si;
                     }
@@ -1069,10 +1117,13 @@ static int plot_raster_default(struct zint_symbol *symbol, const int rotate_angl
 
     } else {
         if (upceanflag && !hide_text) { /* EAN-2, EAN-5 (standalone add-ons) */
-            yposn_si += (int) (font_height + text_gap) * si;
+            yposn_si += (int) ceilf((font_height + symbol->text_gap) * si);
         }
         for (r = 0; r < symbol->rows; r++) {
-            const int row_height_si = row_heights_si[r];
+            int row_height_si = row_heights_si[r];
+            if (upceanflag && !hide_text) { /* EAN-2, EAN-5 (standalone add-ons) */
+                row_height_si += textoffset * si - (yposn_si - yoffset_si);
+            }
 
             for (i = 0; i < symbol->width; i += block_width) {
                 const int fill = module_is_set(symbol, r, i);
@@ -1096,19 +1147,19 @@ static int plot_raster_default(struct zint_symbol *symbol, const int rotate_angl
         const int guard_descent_si = guard_descent * si;
 
         if (upceanflag == 6) { /* UPC-E */
-            draw_bar_line(pixelbuf, 0 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 2 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 46 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 48 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 50 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 0 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 2 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 46 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 48 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 50 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
 
         } else if (upceanflag == 8) { /* EAN-8 */
-            draw_bar_line(pixelbuf, 0 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 2 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 32 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 34 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 64 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 66 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 0 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 2 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 32 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 34 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 64 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 66 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
 
         } else if (upceanflag == 12) { /* UPC-A */
             for (i = 0 + comp_xoffset; i < 11 + comp_xoffset; i += block_width) {
@@ -1121,8 +1172,8 @@ static int plot_raster_default(struct zint_symbol *symbol, const int rotate_angl
                                 DEFAULT_INK);
                 }
             }
-            draw_bar_line(pixelbuf, 46 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 48 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 46 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 48 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
             for (i = 85 + comp_xoffset; i < 96 + comp_xoffset; i += block_width) {
                 const int fill = module_is_set(symbol, symbol->rows - 1, i);
                 for (block_width = 1; (i + block_width < symbol->width)
@@ -1135,150 +1186,156 @@ static int plot_raster_default(struct zint_symbol *symbol, const int rotate_angl
             }
 
         } else { /* EAN-13 */
-            draw_bar_line(pixelbuf, 0 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 2 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 46 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 48 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 92 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
-            draw_bar_line(pixelbuf, 94 * si + comp_xoffset_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 0 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 2 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 46 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 48 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 92 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
+            draw_bar_line(pixelbuf, 94 * si + xoffset_comp_si, 1 * si, guard_yoffset_si, image_width, DEFAULT_INK);
         }
-        copy_bar_line(pixelbuf, comp_xoffset_si, image_width - comp_xoffset_si - roffset_si, guard_yoffset_si,
+        copy_bar_line(pixelbuf, xoffset_comp_si, image_width - xoffset_comp_si - roffset_si, guard_yoffset_si,
                     guard_descent_si, image_width, image_height);
     }
 
     /* Add the text */
 
     if (!hide_text) {
-        int text_yposn = yoffset_si + symbol_height_si + (int) (text_gap * si); /* Calculated to top of text */
-        if (upceanflag == 2 || upceanflag == 5) { /* EAN-2/5 */
-            text_yposn = yoffset_si;
-        }
-        if (symbol->border_width > 0 && (symbol->output_options & (BARCODE_BOX | BARCODE_BIND))) {
-            text_yposn += symbol->border_width * si; /* Note not needed for BARCODE_BIND_TOP */
-        }
 
         if (upceanflag >= 6) { /* UPC-E, EAN-8, UPC-A, EAN-13 */
-            const int addon_len = (int) ustrlen(addon);
 
             /* Note font sizes halved as in pixels */
-
-            /* Halved again to get middle position that draw_string() expects */
-            const int upcea_width_adj = (UPCEAN_SMALL_FONT_WIDTH + 3) / 4;
             const int upcea_height_adj = ((UPCEAN_FONT_HEIGHT - UPCEAN_SMALL_FONT_HEIGHT) * si + 1) / 2;
-            /* Halved again to get middle position that draw_string() expects */
-            const int ean_width_adj = (UPCEAN_FONT_WIDTH + 3) / 4;
 
-            out_upcean_split_text(upceanflag, symbol->text, textparts);
+            int text_yposn = yoffset_si + symbol_height_si + (int) (symbol->text_gap * si);
+            if (symbol->border_width > 0 && (symbol->output_options & (BARCODE_BOX | BARCODE_BIND))
+                    && !(symbol->output_options & BARCODE_BIND_TOP)) { /* Trumps BARCODE_BOX & BARCODE_BIND */
+                text_yposn += symbol->border_width * si;
+            }
 
             if (upceanflag == 6) { /* UPC-E */
-                int text_xposn = -(5 + upcea_width_adj) * si + comp_xoffset_si;
-                draw_string(pixelbuf, textparts[0], text_xposn, text_yposn + upcea_height_adj, textflags | SMALL_TEXT,
-                            image_width, image_height, si);
-                text_xposn = 24 * si + comp_xoffset_si;
-                draw_string(pixelbuf, textparts[1], text_xposn, text_yposn, textflags, image_width, image_height, si);
-                text_xposn = (51 + 3 + upcea_width_adj) * si + comp_xoffset_si;
-                draw_string(pixelbuf, textparts[2], text_xposn, text_yposn + upcea_height_adj, textflags | SMALL_TEXT,
-                            image_width, image_height, si);
+                int text_xposn = -5 * si + xoffset_comp_si;
+                draw_string(pixelbuf, symbol->text, 1, text_xposn, text_yposn + upcea_height_adj,
+                            textflags | SMALL_TEXT | ZFONT_HALIGN_RIGHT, image_width, image_height, si);
+                text_xposn = 24 * si + xoffset_comp_si;
+                draw_string(pixelbuf, symbol->text + 1, 6, text_xposn, text_yposn, textflags, image_width,
+                            image_height, si);
+                text_xposn = (51 + 3) * si + xoffset_comp_si;
+                draw_string(pixelbuf, symbol->text + 7, 1, text_xposn, text_yposn + upcea_height_adj,
+                            textflags | SMALL_TEXT | ZFONT_HALIGN_LEFT, image_width, image_height, si);
                 if (addon_len) {
-                    text_xposn = ((addon_len == 2 ? 61 : 75) + addon_gap) * si + comp_xoffset_si;
-                    draw_string(pixelbuf, addon, text_xposn, addon_text_yposn, textflags,
+                    text_xposn = ((addon_len == 2 ? 61 : 75) + addon_gap) * si + xoffset_comp_si;
+                    draw_string(pixelbuf, addon, addon_len, text_xposn, addon_text_yposn, textflags,
                                 image_width, image_height, si);
                     if (upcean_guard_whitespace) {
-                        text_xposn = (int) (((addon_len == 2 ? 70 : 97) + 1.5f + upcea_width_adj + addon_gap) * si)
-                                        + comp_xoffset_si;
-                        draw_string(pixelbuf, (const unsigned char *) ">", text_xposn, addon_text_yposn, textflags,
-                                    image_width, image_height, si);
+                        text_xposn = symbol->width * si + qz_right_si + xoffset_si;
+                        draw_string(pixelbuf, (const unsigned char *) ">", 1, text_xposn, addon_text_yposn,
+                                    textflags | ZFONT_HALIGN_RIGHT, image_width, image_height, si);
                     }
                 }
 
             } else if (upceanflag == 8) { /* EAN-8 */
                 int text_xposn;
                 if (upcean_guard_whitespace) {
-                    text_xposn = -(ean_width_adj + 2) * si + comp_xoffset_si;
-                    draw_string(pixelbuf, (const unsigned char *) "<", text_xposn, text_yposn, textflags,
-                                image_width, image_height, si);
+                    text_xposn = -7 * si + xoffset_comp_si;
+                    draw_string(pixelbuf, (const unsigned char *) "<", 1, text_xposn, text_yposn,
+                                textflags | ZFONT_HALIGN_LEFT, image_width, image_height, si);
                 }
-                text_xposn = 17 * si + comp_xoffset_si;
-                draw_string(pixelbuf, textparts[0], text_xposn, text_yposn, textflags, image_width, image_height, si);
-                text_xposn = 50 * si + comp_xoffset_si;
-                draw_string(pixelbuf, textparts[1], text_xposn, text_yposn, textflags, image_width, image_height, si);
+                text_xposn = 17 * si + xoffset_comp_si;
+                draw_string(pixelbuf, symbol->text, 4, text_xposn, text_yposn, textflags, image_width, image_height,
+                            si);
+                text_xposn = 50 * si + xoffset_comp_si;
+                draw_string(pixelbuf, symbol->text + 4, 4, text_xposn, text_yposn, textflags, image_width,
+                            image_height, si);
                 if (addon_len) {
-                    text_xposn = ((addon_len == 2 ? 77 : 91) + addon_gap) * si + comp_xoffset_si;
-                    draw_string(pixelbuf, addon, text_xposn, addon_text_yposn, textflags,
+                    text_xposn = ((addon_len == 2 ? 77 : 91) + addon_gap) * si + xoffset_comp_si;
+                    draw_string(pixelbuf, addon, addon_len, text_xposn, addon_text_yposn, textflags,
                                 image_width, image_height, si);
                     if (upcean_guard_whitespace) {
-                        text_xposn = (int) (((addon_len == 2 ? 86 : 113) + 0.5f + ean_width_adj + addon_gap) * si)
-                                            + comp_xoffset_si;
-                        draw_string(pixelbuf, (const unsigned char *) ">", text_xposn, addon_text_yposn, textflags,
-                                    image_width, image_height, si);
+                        text_xposn = symbol->width * si + qz_right_si + xoffset_si;
+                        draw_string(pixelbuf, (const unsigned char *) ">", 1, text_xposn, addon_text_yposn,
+                                    textflags | ZFONT_HALIGN_RIGHT, image_width, image_height, si);
                     }
                 } else if (upcean_guard_whitespace) {
-                    text_xposn = (int) ((68 + 0.5f + ean_width_adj) * si) + comp_xoffset_si;
-                    draw_string(pixelbuf, (const unsigned char *) ">", text_xposn, text_yposn, textflags,
-                                image_width, image_height, si);
+                    text_xposn = symbol->width * si + qz_right_si + xoffset_si;
+                    draw_string(pixelbuf, (const unsigned char *) ">", 1, text_xposn, text_yposn,
+                                textflags | ZFONT_HALIGN_RIGHT, image_width, image_height, si);
                 }
 
             } else if (upceanflag == 12) { /* UPC-A */
-                int text_xposn = (-(5 + upcea_width_adj)) * si + comp_xoffset_si;
-                draw_string(pixelbuf, textparts[0], text_xposn, text_yposn + upcea_height_adj, textflags | SMALL_TEXT,
-                            image_width, image_height, si);
-                text_xposn = 27 * si + comp_xoffset_si;
-                draw_string(pixelbuf, textparts[1], text_xposn, text_yposn, textflags, image_width, image_height, si);
-                text_xposn = 67 * si + comp_xoffset_si;
-                draw_string(pixelbuf, textparts[2], text_xposn, text_yposn, textflags, image_width, image_height, si);
-                text_xposn = (95 + 5 + upcea_width_adj) * si + comp_xoffset_si;
-                draw_string(pixelbuf, textparts[3], text_xposn, text_yposn + upcea_height_adj, textflags | SMALL_TEXT,
-                            image_width, image_height, si);
+                int text_xposn = -5 * si + xoffset_comp_si;
+                draw_string(pixelbuf, symbol->text, 1, text_xposn, text_yposn + upcea_height_adj,
+                            textflags | SMALL_TEXT | ZFONT_HALIGN_RIGHT, image_width, image_height, si);
+                text_xposn = 28 * si + xoffset_comp_si;
+                draw_string(pixelbuf, symbol->text + 1, 5, text_xposn, text_yposn, textflags, image_width,
+                            image_height, si);
+                text_xposn = 67 * si + xoffset_comp_si;
+                draw_string(pixelbuf, symbol->text + 6, 5, text_xposn, text_yposn, textflags, image_width,
+                            image_height, si);
+                text_xposn = (95 + 5) * si + xoffset_comp_si;
+                draw_string(pixelbuf, symbol->text + 11, 1, text_xposn, text_yposn + upcea_height_adj,
+                            textflags | SMALL_TEXT | ZFONT_HALIGN_LEFT, image_width, image_height, si);
                 if (addon_len) {
-                    text_xposn = ((addon_len == 2 ? 105 : 119) + addon_gap) * si + comp_xoffset_si;
-                    draw_string(pixelbuf, addon, text_xposn, addon_text_yposn, textflags,
+                    text_xposn = ((addon_len == 2 ? 105 : 119) + addon_gap) * si + xoffset_comp_si;
+                    draw_string(pixelbuf, addon, addon_len, text_xposn, addon_text_yposn, textflags,
                                 image_width, image_height, si);
                     if (upcean_guard_whitespace) {
-                        text_xposn = (int) (((addon_len == 2 ? 114 : 141) + 0.5f + ean_width_adj + addon_gap) * si)
-                                            + comp_xoffset_si;
-                        draw_string(pixelbuf, (const unsigned char *) ">", text_xposn, addon_text_yposn, textflags,
-                                    image_width, image_height, si);
+                        text_xposn = symbol->width * si + qz_right_si + xoffset_si;
+                        draw_string(pixelbuf, (const unsigned char *) ">", 1, text_xposn, addon_text_yposn,
+                                    textflags | ZFONT_HALIGN_RIGHT, image_width, image_height, si);
                     }
                 }
 
             } else { /* EAN-13 */
-                int text_xposn = (-(5 + ean_width_adj)) * si + comp_xoffset_si;
-                draw_string(pixelbuf, textparts[0], text_xposn, text_yposn, textflags, image_width, image_height, si);
-                text_xposn = 24 * si + comp_xoffset_si;
-                draw_string(pixelbuf, textparts[1], text_xposn, text_yposn, textflags, image_width, image_height, si);
-                text_xposn = 71 * si + comp_xoffset_si;
-                draw_string(pixelbuf, textparts[2], text_xposn, text_yposn, textflags, image_width, image_height, si);
+                int text_xposn = -5 * si + xoffset_comp_si;
+                draw_string(pixelbuf, symbol->text, 1, text_xposn, text_yposn, textflags | ZFONT_HALIGN_RIGHT,
+                            image_width, image_height, si);
+                text_xposn = 24 * si + xoffset_comp_si;
+                draw_string(pixelbuf, symbol->text + 1, 6, text_xposn, text_yposn, textflags, image_width,
+                            image_height, si);
+                text_xposn = 71 * si + xoffset_comp_si;
+                draw_string(pixelbuf, symbol->text + 7, 6, text_xposn, text_yposn, textflags, image_width,
+                            image_height, si);
                 if (addon_len) {
-                    text_xposn = ((addon_len == 2 ? 105 : 119) + addon_gap) * si + comp_xoffset_si;
-                    draw_string(pixelbuf, addon, text_xposn, addon_text_yposn, textflags,
+                    text_xposn = ((addon_len == 2 ? 105 : 119) + addon_gap) * si + xoffset_comp_si;
+                    draw_string(pixelbuf, addon, addon_len, text_xposn, addon_text_yposn, textflags,
                                 image_width, image_height, si);
                     if (upcean_guard_whitespace) {
-                        text_xposn = (int) (((addon_len == 2 ? 114 : 141) + 0.5f + ean_width_adj + addon_gap) * si)
-                                            + comp_xoffset_si;
-                        draw_string(pixelbuf, (const unsigned char *) ">", text_xposn, addon_text_yposn, textflags,
-                                    image_width, image_height, si);
+                        text_xposn = symbol->width * si + qz_right_si + xoffset_si;
+                        draw_string(pixelbuf, (const unsigned char *) ">", 1, text_xposn, addon_text_yposn,
+                                    textflags | ZFONT_HALIGN_RIGHT, image_width, image_height, si);
                     }
                 } else if (upcean_guard_whitespace) {
-                    text_xposn = (int) ((96 + 0.5f + ean_width_adj) * si) + comp_xoffset_si;
-                    draw_string(pixelbuf, (const unsigned char *) ">", text_xposn, text_yposn, textflags,
-                                image_width, image_height, si);
+                    text_xposn = symbol->width * si + qz_right_si + xoffset_si;
+                    draw_string(pixelbuf, (const unsigned char *) ">", 1, text_xposn, text_yposn,
+                                textflags | ZFONT_HALIGN_RIGHT, image_width, image_height, si);
                 }
             }
+        } else if (upceanflag) { /* EAN-2, EAN-5 (standalone add-ons) */
+            int text_xposn = (int) ((main_width / 2.0f) * si) + xoffset_si;
+            int text_yposn = yoffset_si;
+            if (symbol->border_width > 0
+                    && (symbol->output_options & (BARCODE_BOX | BARCODE_BIND | BARCODE_BIND_TOP))) {
+                text_yposn -= symbol->border_width * si;
+            }
+            /* Put the human readable text at the top */
+            draw_string(pixelbuf, symbol->text, -1, text_xposn, text_yposn, textflags, image_width, image_height, si);
+            if (upcean_guard_whitespace) {
+                text_xposn = symbol->width * si + qz_right_si + xoffset_comp_si;
+                draw_string(pixelbuf, (const unsigned char *) ">", 1, text_xposn, text_yposn,
+                            textflags | ZFONT_HALIGN_RIGHT, image_width, image_height, si);
+            }
         } else {
-            int text_xposn = (main_width / 2) * si + xoffset_si;
             /* Suppress clang-analyzer-core.CallAndMessage warning */
             unsigned char local_text[sizeof(symbol->text)] = {0};
-            to_iso8859_1(symbol->text, local_text);
-            /* Put the human readable text at the bottom (or top if EAN-2/5) */
-            draw_string(pixelbuf, local_text, text_xposn, text_yposn, textflags, image_width, image_height, si);
-            /* EAN-2/5 */
-            if (upceanflag && upcean_guard_whitespace) {
-                const int ean_width_adj = (UPCEAN_FONT_WIDTH + 3) / 4;
-                const int addon_len = (int) ustrlen(symbol->text);
-                text_xposn = (int) (((addon_len == 2 ? 19 : 46) + 0.5f + ean_width_adj) * si) + xoffset_si;
-                draw_string(pixelbuf, (const unsigned char *) ">", text_xposn, text_yposn, textflags,
-                            image_width, image_height, si);
+            int text_xposn = (int) ((main_width / 2.0f) * si) + xoffset_si;
+            int text_yposn = yoffset_si + symbol_height_si + (int) (symbol->text_gap * si);
+            if (symbol->border_width > 0 && (symbol->output_options & (BARCODE_BOX | BARCODE_BIND))
+                    && !(symbol->output_options & BARCODE_BIND_TOP)) { /* Trumps BARCODE_BOX & BARCODE_BIND */
+                text_yposn += symbol->border_width * si;
             }
+            to_iso8859_1(symbol->text, local_text);
+            /* Put the human readable text at the bottom */
+            draw_string(pixelbuf, local_text, -1, text_xposn, text_yposn, textflags, image_width, image_height, si);
         }
     }
 
@@ -1306,7 +1363,7 @@ static int plot_raster_default(struct zint_symbol *symbol, const int rotate_angl
     }
 
     draw_bind_box(symbol, pixelbuf, xoffset_si, yoffset_si, symbol_height_si, 0 /*dot_overspill_si*/,
-                image_width, image_height, si);
+                upceanflag, (int) (textoffset * si), image_width, image_height, si);
 
     if (!half_int_scaling) {
         size_t prev_image_row;
@@ -1315,16 +1372,16 @@ static int plot_raster_default(struct zint_symbol *symbol, const int rotate_angl
         const int scale_height = (int) stripf(image_height * scaler);
 
         /* Apply scale options by creating another pixel buffer */
-        if (!(scaled_pixelbuf = (unsigned char *) malloc((size_t) scale_width * scale_height))) {
+        if (!(scaled_pixelbuf = (unsigned char *) raster_malloc((size_t) scale_width * scale_height, image_size))) {
             free(pixelbuf);
-            strcpy(symbol->errtxt, "659: Insufficient memory for pixel buffer");
+            strcpy(symbol->errtxt, "659: Insufficient memory for scaled pixel buffer");
             return ZINT_ERROR_MEMORY;
         }
         memset(scaled_pixelbuf, DEFAULT_PAPER, (size_t) scale_width * scale_height);
 
         /* Interpolate */
         for (r = 0; r < scale_height; r++) {
-            size_t scaled_row = r * scale_width;
+            size_t scaled_row = (size_t) scale_width * r;
             size_t image_row = (size_t) stripf(r / scaler) * image_width;
             if (r && (image_row == prev_image_row
                     || memcmp(pixelbuf + image_row, pixelbuf + prev_image_row, image_width) == 0)) {
@@ -1366,6 +1423,10 @@ INTERNAL int plot_raster(struct zint_symbol *symbol, int rotate_angle, int file_
     error = out_check_colour_options(symbol);
     if (error != 0) {
         return error;
+    }
+    if (symbol->rows <= 0) {
+        strcpy(symbol->errtxt, "664: No rows");
+        return ZINT_ERROR_INVALID_OPTION;
     }
 
     if (symbol->symbology == BARCODE_MAXICODE) {

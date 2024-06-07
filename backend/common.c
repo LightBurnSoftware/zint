@@ -1,7 +1,7 @@
 /* common.c - Contains functions needed for a number of barcodes */
 /*
     libzint - the open source barcode library
-    Copyright (C) 2008-2023 Robin Stuart <rstuart114@gmail.com>
+    Copyright (C) 2008-2024 Robin Stuart <rstuart114@gmail.com>
 
     Redistribution and use in source and binary forms, with or without
     modification, are permitted provided that the following conditions
@@ -31,9 +31,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 
 #include <assert.h>
-#ifdef ZINT_TEST
 #include <stdio.h>
-#endif
 #include "common.h"
 
 /* Converts a character 0-9, A-F to its equivalent integer value */
@@ -269,8 +267,8 @@ INTERNAL int is_stackable(const int symbology) {
     return 0;
 }
 
-/* Whether `symbology` can have add-on (EAN-2 and EAN-5) */
-INTERNAL int is_extendable(const int symbology) {
+/* Whether `symbology` is EAN/UPC */
+INTERNAL int is_upcean(const int symbology) {
 
     switch (symbology) {
         case BARCODE_EANX:
@@ -553,10 +551,9 @@ INTERNAL int set_height(struct zint_symbol *symbol, const float min_row_height, 
 }
 
 /* Prevent inlining of `stripf()` which can optimize away its effect */
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(__GNUC__) && (__GNUC__ >= 4 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 1))
 __attribute__((__noinline__))
-#endif
-#if defined(_MSC_VER) && _MSC_VER >= 1310 /* MSVC 2003 (VC++ 7.1) */
+#elif defined(_MSC_VER) && _MSC_VER >= 1310 /* MSVC 2003 (VC++ 7.1) */
 __declspec(noinline)
 #endif
 /* Removes excess precision from floats - see https://stackoverflow.com/q/503436 */
@@ -592,55 +589,27 @@ INTERNAL void segs_cpy(const struct zint_symbol *symbol, const struct zint_seg s
     }
 }
 
-/* Returns red component if any of ultra colour indexing "0CBMRYGKW" */
-INTERNAL int colour_to_red(const int colour) {
-    int return_val = 0;
-
-    switch (colour) {
-        case 8: /* White */
-        case 3: /* Magenta */
-        case 4: /* Red */
-        case 5: /* Yellow */
-            return_val = 255;
-            break;
+/* Helper for ZINT_DEBUG_PRINT to put all but graphical ASCII in angle brackets */
+INTERNAL char *debug_print_escape(const unsigned char *source, const int first_len, char *buf) {
+    int i, j = 0;
+    for (i = 0; i < first_len; i++) {
+        const unsigned char ch = source[i];
+        if (ch < 32 || ch >= 127) {
+            j += sprintf(buf + j, "<%03o>", ch & 0xFF);
+        } else {
+            buf[j++] = ch;
+        }
     }
-
-    return return_val;
-}
-
-/* Returns green component if any of ultra colour indexing "0CBMRYGKW" */
-INTERNAL int colour_to_green(const int colour) {
-    int return_val = 0;
-
-    switch (colour) {
-        case 8: /* White */
-        case 1: /* Cyan */
-        case 5: /* Yellow */
-        case 6: /* Green */
-            return_val = 255;
-            break;
-    }
-
-    return return_val;
-}
-
-/* Returns blue component if any of ultra colour indexing "0CBMRYGKW" */
-INTERNAL int colour_to_blue(const int colour) {
-    int return_val = 0;
-
-    switch (colour) {
-        case 8: /* White */
-        case 1: /* Cyan */
-        case 2: /* Blue */
-        case 3: /* Magenta */
-            return_val = 255;
-            break;
-    }
-
-    return return_val;
+    buf[j] = '\0';
+    return buf;
 }
 
 #ifdef ZINT_TEST
+/* Suppress gcc warning null destination pointer [-Wformat-overflow=] false-positive */
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 7
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-overflow="
+#endif
 /* Dumps hex-formatted codewords in symbol->errtxt (for use in testing) */
 INTERNAL void debug_test_codeword_dump(struct zint_symbol *symbol, const unsigned char *codewords, const int length) {
     int i, max = length, cnt_len = 0;
@@ -651,6 +620,24 @@ INTERNAL void debug_test_codeword_dump(struct zint_symbol *symbol, const unsigne
     }
     for (i = 0; i < max; i++) {
         sprintf(symbol->errtxt + cnt_len + i * 3, "%02X ", codewords[i]);
+    }
+    symbol->errtxt[strlen(symbol->errtxt) - 1] = '\0'; /* Zap last space */
+}
+
+/* Dumps decimal-formatted codewords in symbol->errtxt (for use in testing) */
+INTERNAL void debug_test_codeword_dump_short(struct zint_symbol *symbol, const short *codewords, const int length) {
+    int i, max = 0, cnt_len, errtxt_len;
+    char temp[20];
+    errtxt_len = sprintf(symbol->errtxt, "(%d) ", length); /* Place the number of codewords at the front */
+    for (i = 0, cnt_len = errtxt_len; i < length; i++) {
+        cnt_len += sprintf(temp, "%d ", codewords[i]);
+        if (cnt_len > 92) {
+            break;
+        }
+        max++;
+    }
+    for (i = 0; i < max; i++) {
+        errtxt_len += sprintf(symbol->errtxt + errtxt_len, "%d ", codewords[i]);
     }
     symbol->errtxt[strlen(symbol->errtxt) - 1] = '\0'; /* Zap last space */
 }
@@ -672,6 +659,9 @@ INTERNAL void debug_test_codeword_dump_int(struct zint_symbol *symbol, const int
     }
     symbol->errtxt[strlen(symbol->errtxt) - 1] = '\0'; /* Zap last space */
 }
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 7
+#pragma GCC diagnostic pop
 #endif
+#endif /*ZINT_TEST*/
 
 /* vim: set ts=4 sw=4 et : */

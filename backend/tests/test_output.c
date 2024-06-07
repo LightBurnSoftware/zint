@@ -1,6 +1,6 @@
 /*
     libzint - the open source barcode library
-    Copyright (C) 2021-2023 Robin Stuart <rstuart114@gmail.com>
+    Copyright (C) 2021-2024 Robin Stuart <rstuart114@gmail.com>
 
     Redistribution and use in source and binary forms, with or without
     modification, are permitted provided that the following conditions
@@ -31,7 +31,6 @@
 
 #include "testcommon.h"
 #include "../output.h"
-#include <locale.h>
 #ifdef _WIN32
 #include <windows.h>
 #include <direct.h>
@@ -124,8 +123,8 @@ static void test_colour_get_rgb(const testCtx *const p_ctx) {
         unsigned char red = 0, green = 0, blue = 0, alpha = 0, rgb_alpha = 0;
         int cyan, magenta, yellow, black;
         int have_alpha;
-        char rgb[9];
-        char cmyk[16];
+        char rgb[64];
+        char cmyk[64];
 
         if (testContinue(p_ctx, i)) continue;
 
@@ -182,7 +181,7 @@ static void test_colour_get_cmyk(const testCtx *const p_ctx) {
     for (i = 0; i < data_size; i++) {
         int cyan, magenta, yellow, black;
         unsigned char red, green, blue, alpha, rgb_alpha;
-        char rgb[9];
+        char rgb[16];
 
         if (testContinue(p_ctx, i)) continue;
 
@@ -225,6 +224,89 @@ static void test_quiet_zones(const testCtx *const p_ctx) {
         ret = out_quiet_zones_test(&symbol, hide_text, comp_xoffset, &left, &right, &top, &bottom);
         if (i != BARCODE_FLAT && i != BARCODE_BC412) { /* Only two which aren't marked as done */
             assert_nonzero(ret, "i:%d %s not done\n", i, testUtilBarcodeName(i));
+        }
+    }
+
+    testFinish();
+}
+
+static void test_set_whitespace_offsets(const testCtx *const p_ctx) {
+
+    struct item {
+        int symbology;
+        int whitespace_width;
+        int whitespace_height;
+        int border_width;
+        int output_options;
+        int hide_text;
+        int comp_xoffset;
+        float scaler;
+
+        float expected_xoffset;
+        float expected_yoffset;
+        float expected_roffset;
+        float expected_boffset;
+        float expected_qz_right;
+    };
+    /* s/\/\*[ 0-9]*\*\//\=printf("\/\*%3d*\/", line(".") - line("'<")): */
+    struct item data[] = {
+        /*  0*/ { BARCODE_CODE128, 1, 0, 0, 0, 0, 0, 0.0f, /*expected*/ 1.0f, 0.0f, 1.0f, 0.0f, 0.0f },
+        /*  1*/ { BARCODE_CODE128, 2, 0, 0, 0, 0, 0, 1.0f, /*expected*/ 2.0f, 0.0f, 2.0f, 0.0f, 0.0f },
+        /*  2*/ { BARCODE_CODE128, 2, 3, 0, 0, 0, 0, 1.0f, /*expected*/ 2.0f, 3.0f, 2.0f, 3.0f, 0.0f },
+        /*  3*/ { BARCODE_CODE128, 2, 3, 1, 0, 0, 0, 1.0f, /*expected*/ 2.0f, 3.0f, 2.0f, 3.0f, 0.0f },
+        /*  4*/ { BARCODE_CODE128, 2, 3, 1, BARCODE_BIND, 0, 0, 1.0f, /*expected*/ 2.0f, 4.0f, 2.0f, 4.0f, 0.0f },
+        /*  5*/ { BARCODE_CODE128, 2, 3, 1, BARCODE_BIND_TOP, 0, 0, 1.0f, /*expected*/ 2.0f, 4.0f, 2.0f, 3.0f, 0.0f },
+        /*  6*/ { BARCODE_CODE128, 2, 3, 1, BARCODE_BIND_TOP | BARCODE_BIND, 0, 0, 1.0f, /*expected*/ 2.0f, 4.0f, 2.0f, 3.0f, 0.0f }, /* BIND_TOP wins */
+        /*  7*/ { BARCODE_CODE128, 2, 3, 1, BARCODE_BOX, 0, 0, 1.0f, /*expected*/ 3.0f, 4.0f, 3.0f, 4.0f, 0.0f },
+        /*  8*/ { BARCODE_CODE128, 2, 3, 1, BARCODE_BIND_TOP | BARCODE_BOX, 0, 0, 1.0f, /*expected*/ 3.0f, 4.0f, 3.0f, 3.0f, 0.0f }, /* BIND_TOP wins */
+        /*  9*/ { BARCODE_CODE128, 2, 3, 1, BARCODE_BOX | BARCODE_BIND, 0, 0, 1.0f, /*expected*/ 3.0f, 4.0f, 3.0f, 4.0f, 0.0f }, /* BIND_BOX wins */
+        /* 10*/ { BARCODE_CODE128, 2, 3, 1, BARCODE_BIND_TOP | BARCODE_BOX | BARCODE_BIND, 0, 0, 1.0f, /*expected*/ 3.0f, 4.0f, 3.0f, 3.0f, 0.0f }, /* BIND_TOP wins */
+        /* 11*/ { BARCODE_CODE128, 2, 3, 1, BARCODE_BOX | BARCODE_QUIET_ZONES, 0, 0, 1.0f, /*expected*/ 13.0f, 4.0f, 13.0f, 4.0f, 10.0f },
+    };
+    int data_size = ARRAY_SIZE(data);
+    int i;
+    struct zint_symbol symbol = {0};
+    float xoffset, yoffset, roffset, boffset, qz_right;
+    int xoffset_si, yoffset_si, roffset_si, boffset_si, qz_right_si;
+
+    testStart("test_set_whitespace_offsets");
+
+    for (i = 0; i < data_size; i++) {
+        if (testContinue(p_ctx, i)) continue;
+
+        xoffset = yoffset = roffset = boffset = qz_right = 0.0f;
+        xoffset_si = yoffset_si = roffset_si = boffset_si = qz_right_si = 0;
+
+        symbol.symbology = data[i].symbology;
+        symbol.whitespace_width = data[i].whitespace_width;
+        symbol.whitespace_height = data[i].whitespace_height;
+        symbol.border_width = data[i].border_width;
+        symbol.output_options = data[i].output_options;
+        out_set_whitespace_offsets(&symbol, data[i].hide_text, data[i].comp_xoffset,
+                &xoffset, &yoffset, &roffset, &boffset, &qz_right, data[i].scaler,
+                &xoffset_si, &yoffset_si, &roffset_si, &boffset_si, &qz_right_si);
+        assert_equal(xoffset, data[i].expected_xoffset, "i:%d xoffset %g != %g\n", i, xoffset, data[i].expected_xoffset);
+        assert_equal(yoffset, data[i].expected_yoffset, "i:%d yoffset %g != %g\n", i, yoffset, data[i].expected_yoffset);
+        assert_equal(roffset, data[i].expected_roffset, "i:%d roffset %g != %g\n", i, roffset, data[i].expected_roffset);
+        assert_equal(boffset, data[i].expected_boffset, "i:%d boffset %g != %g\n", i, boffset, data[i].expected_boffset);
+        assert_equal(qz_right, data[i].expected_qz_right, "i:%d qz_right %g != %g\n", i, qz_right, data[i].expected_qz_right);
+        if (data[i].scaler) {
+            int expected_xoffset_si = (int) (data[i].expected_xoffset * data[i].scaler);
+            int expected_yoffset_si = (int) (data[i].expected_yoffset * data[i].scaler);
+            int expected_roffset_si = (int) (data[i].expected_roffset * data[i].scaler);
+            int expected_boffset_si = (int) (data[i].expected_boffset * data[i].scaler);
+            int expected_qz_right_si = (int) (data[i].expected_qz_right * data[i].scaler);
+            assert_equal(xoffset_si, expected_xoffset_si, "i:%d xoffset_si %d != %d\n", i, xoffset_si, expected_xoffset_si);
+            assert_equal(yoffset_si, expected_yoffset_si, "i:%d yoffset_si %d != %d\n", i, yoffset_si, expected_yoffset_si);
+            assert_equal(roffset_si, expected_roffset_si, "i:%d roffset_si %d != %d\n", i, roffset_si, expected_roffset_si);
+            assert_equal(boffset_si, expected_boffset_si, "i:%d boffset_si %d != %d\n", i, boffset_si, expected_boffset_si);
+            assert_equal(qz_right_si, expected_qz_right_si, "i:%d qz_right_si %d != %d\n", i, qz_right_si, expected_qz_right_si);
+        } else {
+            assert_zero(xoffset_si, "i:%d xoffset_si %d non-zero\n", i, xoffset_si);
+            assert_zero(yoffset_si, "i:%d yoffset_si %d non-zero\n", i, yoffset_si);
+            assert_zero(roffset_si, "i:%d roffset_si %d non-zero\n", i, roffset_si);
+            assert_zero(boffset_si, "i:%d boffset_si %d non-zero\n", i, boffset_si);
+            assert_zero(qz_right_si, "i:%d qz_right_si %d non-zero\n", i, qz_right_si);
         }
     }
 
@@ -328,78 +410,6 @@ static void test_fopen(const testCtx *const p_ctx) {
     testFinish();
 }
 
-static void test_out_putsf(const testCtx *const p_ctx) {
-    int debug = p_ctx->debug;
-
-    struct item {
-        const char *prefix;
-        int dp;
-        float arg;
-        const char *locale;
-        const char *expected;
-    };
-    /* s/\/\*[ 0-9]*\*\//\=printf("\/\*%3d*\/", line(".") - line("'<")): */
-    struct item data[] = {
-        /*  0*/ { "", 2, 1234.123, "", "1234.12" },
-        /*  1*/ { "", 3, 1234.123, "", "1234.123" },
-        /*  2*/ { "prefix ", 4, 1234.123, "", "prefix 1234.123" },
-        /*  3*/ { "", 2, -1234.126, "", "-1234.13" },
-        /*  4*/ { "", 2, 1234.1, "", "1234.1" },
-        /*  5*/ { "", 3, 1234.1, "", "1234.1" },
-        /*  6*/ { "", 4, 1234.1, "", "1234.1" },
-        /*  7*/ { "", 2, 1234.0, "", "1234" },
-        /*  8*/ { "", 2, -1234.0, "", "-1234" },
-        /*  9*/ { "", 3, 1234.1234, "de_DE.UTF-8", "1234.123" },
-        /* 10*/ { "", 4, -1234.1234, "de_DE.UTF-8", "-1234.1234" },
-        /* 11*/ { "prefix ", 4, -1234.1234, "de_DE.UTF-8", "prefix -1234.1234" },
-    };
-    int data_size = ARRAY_SIZE(data);
-    int i;
-
-    FILE *fp;
-    char buf[512] = {0}; /* Suppress clang-16/17 run-time exception MemorySanitizer: use-of-uninitialized-value */
-
-    testStart("test_out_putsf");
-
-#ifdef _WIN32
-    (void)i; (void)fp; (void)buf;
-    testSkip("Test not implemented on Windows");
-#else
-
-    for (i = 0; i < data_size; i++) {
-        const char *locale = NULL;
-
-        if (testContinue(p_ctx, i)) continue;
-
-        buf[0] = '\0';
-        fp = fmemopen(buf, sizeof(buf), "w");
-        assert_nonnull(fp, "%d: fmemopen fail (%d, %s)\n", i, errno, strerror(errno));
-
-        if (data[i].locale && data[i].locale[0]) {
-            locale = setlocale(LC_ALL, data[i].locale);
-            if (!locale) { /* May not be available - warn unless quiet mode */
-                if (!(debug & ZINT_DEBUG_TEST_LESS_NOISY)) {
-                    printf("%d: Warning: locale \"%s\" not available\n", i, data[i].locale);
-                }
-            }
-        }
-
-        out_putsf(data[i].prefix, data[i].dp, data[i].arg, fp);
-
-        assert_zero(fclose(fp), "%d: fclose fail (%d, %s)\n", i, errno, strerror(errno));
-
-        if (locale) {
-            assert_nonnull(setlocale(LC_ALL, locale), "%d: setlocale(%s) restore fail (%d, %s)\n",
-                i, locale, errno, strerror(errno));
-        }
-
-        assert_zero(strcmp(buf, data[i].expected), "%d: strcmp(%s, %s) != 0\n", i, buf, data[i].expected);
-    }
-
-    testFinish();
-#endif /* _WIN32 */
-}
-
 int main(int argc, char *argv[]) {
 
     testFunction funcs[] = { /* name, func */
@@ -407,8 +417,8 @@ int main(int argc, char *argv[]) {
         { "test_colour_get_rgb", test_colour_get_rgb },
         { "test_colour_get_cmyk", test_colour_get_cmyk },
         { "test_quiet_zones", test_quiet_zones },
+        { "test_set_whitespace_offsets", test_set_whitespace_offsets },
         { "test_fopen", test_fopen },
-        { "test_out_putsf", test_out_putsf },
     };
 
     testRun(argc, argv, funcs, ARRAY_SIZE(funcs));

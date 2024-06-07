@@ -13,6 +13,7 @@ $endif$
   background-color: $if(backgroundcolor)$$backgroundcolor$$else$#ffffff$endif$;
 }
 body {
+  line-height: 1.2;
   margin: 0 auto;
   max-width: $if(maxwidth)$$maxwidth$$else$50em$endif$;
   padding-left: $if(margin-left)$$margin-left$$else$50px$endif$;
@@ -215,6 +216,9 @@ th {
 td {
   padding: 0.125em 0.5em 0.25em 0.5em;
   vertical-align: top;
+}
+tbody tr:first-child td {
+  padding-top: 0.5em;
 }
 header {
   margin-bottom: 4em;

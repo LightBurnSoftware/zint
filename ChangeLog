@@ -1,5 +1,35 @@
-Version 2.12.0.9 (dev) not released yet
+Version 2.13.0.9 (dev) not released yet
 =======================================
+
+**Incompatible changes**
+------------------------
+- New `memfile` & `memfile_size` fields in `symbol` for use with new output
+  option `BARCODE_MEMORY_FILE`
+
+Changes
+-------
+- BMP: lessen heap memory usage by only `malloc()`ing a row
+- GIF: lessen heap memory usage by paging; use standard colour char map
+- Add `BARCODE_MEMORY_FILE` to `symbol->output_options` to allow outputting to
+  in-memory buffer `symbol->memfile` instead of to file `symbol->outfile`,
+  ticket #301
+- CODE128: improve encodation on A/B shifting, props Daniel Gredler (Okapi)
+
+Bugs
+----
+- raster/BMP/GIF/PCX/TIF: fix dealing with very large data (use `size_t`)
+- raster: add `raster_malloc()` to fail > 1GB (avoids very large output files;
+  also lessens to some degree chances of being victim of OOM killer on Linux)
+- GUI: printing scale dialog: set maxima on X-dim and resolution to keep scale
+  <= 200
+- BMP/EMF/PCX/TIF: fix endianness on big-endian machines (note TIF now always
+  written as little-endian - simplifies testing)
+- ITF14/DPLEIT/DPIDENT: ignore `option_2` (check digit options)
+- GUI: scalewindow: fix cropping of initial resolution and bound X-dim <= 10
+
+
+Version 2.13.0 (2023-12-18)
+===========================
 
 **Incompatible changes**
 ------------------------
@@ -16,7 +46,7 @@ Version 2.12.0.9 (dev) not released yet
 - For Windows, filenames are now assumed to be UTF-8 encoded. Affects `outfile`
   in `zint_symbol` and all API filename arguments
 - Never-used `fontsize` member removed from `zint_symbol`
-- Buffer length of member `text` (HRT) in `zint_symbol` extended 128 -> 160
+- Buffer length of member `text` (HRT) in `zint_symbol` extended 128 -> 200
   (client buffers may need checking/extending)
 - Font of text of SVG vector output now "OCRB, monospace" (EAN/UPC) or
   "Arimo, Arial, sans-serif" (all others)
@@ -27,6 +57,7 @@ Version 2.12.0.9 (dev) not released yet
 - Unlikely-to-be-used `bitmap_byte_length` member removed from `zint_symbol`
   (was only set on BMP output to length of BMP pixel array)
 - EXCODE39 now defaults to displaying check digit in Human Readable Text (HRT)
+- GS1_128 now warns if data > 48 (GS1 General Specifications max)
 
 Changes
 -------
@@ -66,8 +97,7 @@ Changes
 - GUI: use "OCRB" font for EAN/UPC and "Arimo" for all others (was "Helvetica"
   for both); add preview background colour option (default light grey) so as
   whitespace will show up in contrast (access via preview context menu)
-- CODE128/common: move `c128_hrt_cpy_iso8859_1()` to `hrt_cpy_iso8859_1()` and
-  add `ZINT_WARN_HRT_TRUNCATED` warning (for future use)
+- CODE128/common: add `ZINT_WARN_HRT_TRUNCATED` warning
 - QRCODE: better assert(), removing a NOLINT (2 left)
 - CLI: add some more barcode synonyms for DBAR
 - CMake: don't include png.c unless ZINT_USE_PNG (avoids clang warning)
@@ -80,7 +110,15 @@ Changes
 - CODE39/EXCODE39/LOGMARS: new hidden check digit option
 - GUI: move some symbology-specific options into Data Tab so separate tab
   unnecessary
+- DATAMATRIX: add `DM_ISO_144` (--dmiso144) option for ISO placement of ECC
+  codewords instead of default "de facto"
 - manual: add annexes on Qt and Tcl backends
+- CODE128: increase no. symbol chars max 60 -> 99
+- frontend: truncate overlong `--primary` instead of ignoring
+- man page: list size detail for matrix symbols (`--vers`)
+- CODE11/C25XXX/CODE39/EXCODE39/HIBC_39/CODE93/CODABAR/PLESSEY/MSI_PLESSEY/FLAT/
+  DAFT/TELEPEN/TELEPEN_NUM: increase allowed lengths
+- API: add `ZBarcode_Reset()` to fully restore `zint_symbol` to default state
 
 Bugs
 ----
@@ -103,6 +141,29 @@ Bugs
   shifting
 - GUI: fix not enabling font combo "Small Bold (vector only)" by default
 - CODEONE: fix S/T quiet zone 1X bottom (props BWIPP issue #245 doc)
+- EAN-2/EAN-5: fix `BARCODE_BIND_TOP/BIND/BOX` output
+- library: fix 21-bit Unicode conversion in `escape_char_process()`; fix
+  restricting escaped data length by using de-escaped length to check
+- AZTEC: fix out-of-bounds crash when user-specified size given, ticket #300,
+  props Andre Maute; fix 4-layer compact block max (76 -> 64); fix encoding of
+  byte-blocks > 11-bit limit
+- CODABLOCKF: fix crash due to `columns` overflow, ticket #300, props Andre
+  Maute
+- CODEONE: fix out-of-bounds crash in `c1_c40text_cnt()` and looping on latch
+  crash in `c1_encode()` and too small buffer for Version T, ticket #300, props
+  Andre Maute
+- EANX_CC/UPCA_CC: fix crash in `dbar_date()` on not checking length and crash
+  in `gs1_verify()` on not checking length, ticket #300, props Andre Maute
+- GS1_128_CC: fix divide-by-zero crash in `calc_padding_ccc()`, ticket #300,
+  props Andre Maute
+- HANXIN: fix incorrect numeric costings (out-by-1) in `hx_in_numeric()`, ticket
+  #300 (#16), props Andre Maure
+- PDF417: fix out-of-bounds crash in `pdf_text_submode_length()` and
+  out-of-bounds crash on overrunning string and codeword buffers, ticket #300,
+  props Andre Maute
+- QRCODE: fix out-of-bounds crash due to incorrect mode costings for GS1
+  percents in `qr_in_alpha()`; fix incorrect numeric costings (out-by-1) in
+  `qr_in_numeric()`; ticket #300 (#14, #15; #16), props Andre Maute
 
 
 Version 2.12.0 (2022-12-12)

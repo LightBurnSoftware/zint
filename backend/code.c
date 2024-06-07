@@ -1,7 +1,7 @@
 /* code.c - Handles Code 11, 39, 39+, 93, PZN, Channel and VIN */
 /*
     libzint - the open source barcode library
-    Copyright (C) 2008-2023 Robin Stuart <rstuart114@gmail.com>
+    Copyright (C) 2008-2024 Robin Stuart <rstuart114@gmail.com>
 
     Redistribution and use in source and binary forms, with or without
     modification, are permitted provided that the following conditions
@@ -43,18 +43,15 @@ static const char SILVER[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-. $/+%abcd";
 
 #define ARSENIC_F       (IS_NUM_F | IS_ARS_F) /* ARSENIC "0123456789ABCDEFGHJKLMNPRSTUVWXYZ" */
 
-static const char C11Table[11][6] = {
+static const char C11Table[11 + 1][6] = {
     {'1','1','1','1','2','1'}, {'2','1','1','1','2','1'}, {'1','2','1','1','2','1'}, {'2','2','1','1','1','1'},
     {'1','1','2','1','2','1'}, {'2','1','2','1','1','1'}, {'1','2','2','1','1','1'}, {'1','1','1','2','2','1'},
-    {'2','1','1','2','1','1'}, {'2','1','1','1','1','1'}, {'1','1','2','1','1','1'}
+    {'2','1','1','2','1','1'}, {'2','1','1','1','1','1'}, {'1','1','2','1','1','1'},
+    {'1','1','2','2','1','1'} /* Start character (full 6), Stop character (first 5) */
 };
 
-/* Code 39 tables checked against ISO/IEC 16388:2007 */
-
-/* Incorporates Table A1 */
-
-static const char C39Table[43][10] = {
-    /* Code 39 character assignments (Table 1) */
+/* Code 39 character assignments (ISO/IEC 16388:2007 Table 1 and Table A.1) */
+static const char C39Table[43 + 1][10] = {
     {'1','1','1','2','2','1','2','1','1','1'}, {'2','1','1','2','1','1','1','1','2','1'},
     {'1','1','2','2','1','1','1','1','2','1'}, {'2','1','2','2','1','1','1','1','1','1'},
     {'1','1','1','2','2','1','1','1','2','1'}, {'2','1','1','2','2','1','1','1','1','1'},
@@ -76,11 +73,12 @@ static const char C39Table[43][10] = {
     {'1','2','1','1','1','1','2','1','2','1'}, {'2','2','1','1','1','1','2','1','1','1'},
     {'1','2','2','1','1','1','2','1','1','1'}, {'1','2','1','2','1','2','1','1','1','1'},
     {'1','2','1','2','1','1','1','2','1','1'}, {'1','2','1','1','1','2','1','2','1','1'},
-    {'1','1','1','2','1','2','1','2','1','1'}
+    {'1','1','1','2','1','2','1','2','1','1'},
+    {'1','2','1','1','2','1','2','1','1','1'} /* Start character (full 10), Stop character (first 9) */
 };
 
+/* Encoding the full ASCII character set in Code 39 (ISO/IEC 16388:2007 Table A.2) */
 static const char EC39Ctrl[128][2] = {
-    /* Encoding the full ASCII character set in Code 39 (Table A2) */
     {'%','U'}, {'$','A'}, {'$','B'}, {'$','C'}, {'$','D'}, {'$','E'}, {'$','F'}, {'$','G'}, {'$','H'}, {'$','I'},
     {'$','J'}, {'$','K'}, {'$','L'}, {'$','M'}, {'$','N'}, {'$','O'}, {'$','P'}, {'$','Q'}, {'$','R'}, {'$','S'},
     {'$','T'}, {'$','U'}, {'$','V'}, {'$','W'}, {'$','X'}, {'$','Y'}, {'$','Z'}, {'%','A'}, {'%','B'}, {'%','C'},
@@ -96,6 +94,7 @@ static const char EC39Ctrl[128][2] = {
     {'+','X'}, {'+','Y'}, {'+','Z'}, {'%','P'}, {'%','Q'}, {'%','R'}, {'%','S'}, {'%','T'}
 };
 
+/* Code 93 ANSI/AIM BC5-1995 Table 3 */
 static const char C93Ctrl[128][2] = {
     {'b','U'}, {'a','A'}, {'a','B'}, {'a','C'}, {'a','D'}, {'a','E'}, {'a','F'}, {'a','G'}, {'a','H'}, {'a','I'},
     {'a','J'}, {'a','K'}, {'a','L'}, {'a','M'}, {'a','N'}, {'a','O'}, {'a','P'}, {'a','Q'}, {'a','R'}, {'a','S'},
@@ -112,6 +111,7 @@ static const char C93Ctrl[128][2] = {
     {'d','X'}, {'d','Y'}, {'d','Z'}, {'b','P'}, {'b','Q'}, {'b','R'}, {'b','S'}, {'b','T'}
 };
 
+/* Code 93 ANSI/AIM BC5-1995 Table 2 */
 static const char C93Table[47][6] = {
     {'1','3','1','1','1','2'}, {'1','1','1','2','1','3'}, {'1','1','1','3','1','2'}, {'1','1','1','4','1','1'},
     {'1','2','1','1','1','3'}, {'1','2','1','2','1','2'}, {'1','2','1','3','1','1'}, {'1','1','1','1','1','4'},
@@ -127,13 +127,14 @@ static const char C93Table[47][6] = {
     {'3','1','2','1','1','1'}, {'3','1','1','1','2','1'}, {'1','2','2','2','1','1'}
 };
 
-/* *********************** CODE 11 ******************** */
-INTERNAL int code11(struct zint_symbol *symbol, unsigned char source[], int length) { /* Code 11 */
+/* Code 11 */
+INTERNAL int code11(struct zint_symbol *symbol, unsigned char source[], int length) {
 
     int i;
     int h, c_digit, c_weight, c_count, k_digit, k_weight, k_count;
-    int weight[122], error_number = 0;
-    char dest[750]; /* 6 + 121 * 6 + 2 * 6 + 5 + 1 == 750 */
+    int weight[141]; /* 140 + 1 extra for 1st check */
+    char dest[864]; /* 6 + 140 * 6 + 2 * 6 + 5 + 1 = 864 */
+    int error_number = 0;
     char *d = dest;
     int num_check_digits;
     char checkstr[3] = {0};
@@ -142,8 +143,8 @@ INTERNAL int code11(struct zint_symbol *symbol, unsigned char source[], int leng
     /* Suppresses clang-tidy clang-analyzer-core.UndefinedBinaryOperatorResult warning */
     assert(length > 0);
 
-    if (length > 121) {
-        strcpy(symbol->errtxt, "320: Input too long (121 character maximum)");
+    if (length > 140) { /* 8 (Start) + 140 * 8 + 2 * 8 (Check) + 7 (Stop) = 1151 */
+        strcpy(symbol->errtxt, "320: Input too long (140 character maximum)");
         return ZINT_ERROR_TOO_LONG;
     }
     if (!is_sane(SODIUM_MNS_F, source, length)) {
@@ -169,7 +170,7 @@ INTERNAL int code11(struct zint_symbol *symbol, unsigned char source[], int leng
     k_count = 0;
 
     /* start character */
-    memcpy(d, "112211", 6);
+    memcpy(d, C11Table[11], 6);
     d +=  6;
 
     /* Draw main body of barcode */
@@ -222,7 +223,7 @@ INTERNAL int code11(struct zint_symbol *symbol, unsigned char source[], int leng
     }
 
     /* Stop character */
-    memcpy(d, "11221", 5);
+    memcpy(d, C11Table[11], 5);
     d += 5;
 
     expand(symbol, dest, d - dest);
@@ -241,8 +242,8 @@ INTERNAL int code39(struct zint_symbol *symbol, unsigned char source[], int leng
     int i;
     int counter;
     int error_number = 0;
-    int posns[85];
-    char dest[880]; /* 10 (Start) + 85 * 10 + 10 (Check) + 9 (Stop) + 1 = 880 */
+    int posns[86];
+    char dest[890]; /* 10 (Start) + 86 * 10 + 10 (Check) + 9 (Stop) + 1 = 890 */
     char *d = dest;
     char localstr[2] = {0};
 
@@ -257,23 +258,23 @@ INTERNAL int code39(struct zint_symbol *symbol, unsigned char source[], int leng
         strcpy(symbol->errtxt, "322: Input too long (30 character maximum)");
         return ZINT_ERROR_TOO_LONG;
     /* Prevent encoded_data out-of-bounds >= 143 for BARCODE_HIBC_39 due to wider 'wide' bars */
-    } else if ((symbol->symbology == BARCODE_HIBC_39) && (length > 69)) {
+    } else if ((symbol->symbology == BARCODE_HIBC_39) && (length > 70)) { /* 16 (Start) + 70*16 + 15 (Stop) = 1151 */
         /* Note use 319 (2of5 range) as 340 taken by CODE128 */
-        strcpy(symbol->errtxt, "319: Input too long (67 character maximum)"); /* 69 less '+' and check */
+        strcpy(symbol->errtxt, "319: Input too long (68 character maximum)"); /* 70 less '+' and check */
         return ZINT_ERROR_TOO_LONG;
-    } else if (length > 85) {
-        strcpy(symbol->errtxt, "323: Input too long (85 character maximum)");
+    } else if (length > 86) { /* 13 (Start) + 86*13 + 12 (Stop) = 1143 */
+        strcpy(symbol->errtxt, "323: Input too long (86 character maximum)");
         return ZINT_ERROR_TOO_LONG;
     }
 
     to_upper(source, length);
-    if (!is_sane_lookup(SILVER, 43, source, length, posns)) {
+    if (!is_sane_lookup(SILVER, 43 /* Up to "%" */, source, length, posns)) {
         strcpy(symbol->errtxt, "324: Invalid character in data (alphanumerics, space and \"-.$/+%\" only)");
         return ZINT_ERROR_INVALID_DATA;
     }
 
     /* Start character */
-    memcpy(d, "1211212111", 10);
+    memcpy(d, C39Table[43], 10);
     d += 10;
 
     for (i = 0; i < length; i++, d += 10) {
@@ -302,11 +303,11 @@ INTERNAL int code39(struct zint_symbol *symbol, unsigned char source[], int leng
     }
 
     /* Stop character */
-    memcpy(d, "121121211", 9);
+    memcpy(d, C39Table[43], 9);
     d += 9;
 
     if ((symbol->symbology == BARCODE_LOGMARS) || (symbol->symbology == BARCODE_HIBC_39)) {
-        /* LOGMARS uses wider 'wide' bars than normal Code 39 */
+        /* LOGMARS and HIBC use wider 'wide' bars than normal Code 39 */
         counter = d - dest;
         for (i = 0; i < counter; i++) {
             if (dest[i] == '2') {
@@ -326,8 +327,9 @@ INTERNAL int code39(struct zint_symbol *symbol, unsigned char source[], int leng
             /* MIL-STD-1189 Rev. B Section 5.2
                Min height 0.25" / 0.04" (X max) = 6.25
                Default height 0.625" (average of 0.375" - 0.875") / 0.01375" (average of 0.0075" - 0.02") ~ 45.45 */
-            error_number = set_height(symbol, 6.25f, stripf(0.625f / 0.01375f), stripf(0.875f / 0.0075f),
-                                        0 /*no_errtxt*/);
+            const float default_height = 45.4545441f; /* 0.625 / 0.01375 */
+            const float max_height = 116.666664f; /* 0.875 / 0.0075 */
+            error_number = set_height(symbol, 6.25f, default_height, max_height, 0 /*no_errtxt*/);
         } else if (symbol->symbology == BARCODE_CODE39 || symbol->symbology == BARCODE_EXCODE39
                     || symbol->symbology == BARCODE_HIBC_39) {
             /* ISO/IEC 16388:2007 4.4 (e) recommended min height 5.0mm or 15% of width excluding quiet zones;
@@ -428,7 +430,9 @@ INTERNAL int pzn(struct zint_symbol *symbol, unsigned char source[], int length)
            "normal" X 0.25mm (0.187mm - 0.45mm), height 8mm - 20mm for 0.25mm X, 10mm mentioned so use that
            as default, 10mm / 0.25mm = 40 */
         if (error_number < ZINT_ERROR) {
-            error_number = set_height(symbol, stripf(8.0f / 0.45f), 40.0f, stripf(20.0f / 0.187f), 0 /*no_errtxt*/);
+            const float min_height = 17.7777786f; /* 8.0 / 0.45 */
+            const float max_height = 106.951874f; /* 20.0 / 0.187 */
+            error_number = set_height(symbol, min_height, 40.0f, max_height, 0 /*no_errtxt*/);
         }
     } else {
         if (error_number < ZINT_ERROR) {
@@ -442,14 +446,14 @@ INTERNAL int pzn(struct zint_symbol *symbol, unsigned char source[], int length)
 /* Extended Code 39 - ISO/IEC 16388:2007 Annex A */
 INTERNAL int excode39(struct zint_symbol *symbol, unsigned char source[], int length) {
 
-    unsigned char buffer[85 * 2 + 1] = {0};
+    unsigned char buffer[86 * 2 + 1] = {0};
     unsigned char *b = buffer;
     unsigned char check_digit = '\0';
     int i;
     int error_number;
 
-    if (length > 85) {
-        strcpy(symbol->errtxt, "328: Input too long (85 character maximum)");
+    if (length > 86) {
+        strcpy(symbol->errtxt, "328: Input too long (86 character maximum)");
         return ZINT_ERROR_TOO_LONG;
     }
 
@@ -463,8 +467,8 @@ INTERNAL int excode39(struct zint_symbol *symbol, unsigned char source[], int le
         memcpy(b, EC39Ctrl[source[i]], 2);
         b += EC39Ctrl[source[i]][1] ? 2 : 1;
     }
-    if (b - buffer > 85) {
-        strcpy(symbol->errtxt, "317: Expanded input too long (85 symbol character maximum)");
+    if (b - buffer > 86) {
+        strcpy(symbol->errtxt, "317: Expanded input too long (86 symbol character maximum)");
         return ZINT_ERROR_TOO_LONG;
     }
     *b = '\0';
@@ -501,17 +505,17 @@ INTERNAL int code93(struct zint_symbol *symbol, unsigned char source[], int leng
 
     int i;
     int h, weight, c, k, error_number = 0;
-    int values[110]; /* 107 + 2 (Checks) */
-    char buffer[216]; /* 107*2 (107 full ASCII) + 1 = 215 */
+    int values[125]; /* 123 + 2 (Checks) */
+    char buffer[247]; /* 123*2 (123 full ASCII) + 1 = 247 */
     char *b = buffer;
-    char dest[668]; /* 6 (Start) + 107*6 + 2*6 (Checks) + 7 (Stop) + 1 (NUL) = 668 */
+    char dest[764]; /* 6 (Start) + 123*6 + 2*6 (Checks) + 7 (Stop) + 1 (NUL) = 764 */
     char *d = dest;
 
     /* Suppresses clang-tidy clang-analyzer-core.CallAndMessage warning */
     assert(length > 0);
 
-    if (length > 107) { /* 9 (Start) + 107*9 + 2*9 (Checks) + 10 (Stop) == 1000 */
-        strcpy(symbol->errtxt, "330: Input too long (107 character maximum)");
+    if (length > 123) { /* 9 (Start) + 123*9 + 2*9 (Checks) + 10 (Stop) = 1144 */
+        strcpy(symbol->errtxt, "330: Input too long (123 character maximum)");
         return ZINT_ERROR_TOO_LONG;
     }
 
@@ -529,8 +533,8 @@ INTERNAL int code93(struct zint_symbol *symbol, unsigned char source[], int leng
 
     /* Now we can check the true length of the barcode */
     h = b - buffer;
-    if (h > 107) {
-        strcpy(symbol->errtxt, "332: Expanded input too long (107 symbol character maximum)");
+    if (h > 123) {
+        strcpy(symbol->errtxt, "332: Expanded input too long (123 symbol character maximum)");
         return ZINT_ERROR_TOO_LONG;
     }
 
@@ -587,7 +591,7 @@ INTERNAL int code93(struct zint_symbol *symbol, unsigned char source[], int leng
         /* ANSI/AIM BC5-1995 Section 2.6 minimum height 0.2" or 15% of symbol length, whichever is greater
            no max X given so for min height use symbol length = (9 * (C + 4) + 1) * X + 2 * Q = symbol->width + 20;
            use 40 as default height based on figures in spec */
-        float min_height = stripf((symbol->width + 20) * 0.15f);
+        const float min_height = stripf((symbol->width + 20) * 0.15f);
         error_number = set_height(symbol, min_height, min_height > 40.0f ? min_height : 40.0f, 0.0f, 0 /*no_errtxt*/);
     } else {
         (void) set_height(symbol, 0.0f, 50.0f, 0.0f, 1 /*no_errtxt*/);
@@ -627,19 +631,19 @@ static void channel_generate_precalc(int channels, long value, int mod, int last
 #include "channel_precalcs.h"
 #endif
 
-static long channel_copy_precalc(channel_precalc precalc, int B[8], int S[8], int bmax[7], int smax[7]) {
+static long channel_copy_precalc(channel_precalc *const precalc, int B[8], int S[8], int bmax[7], int smax[7]) {
     int i;
 
     for (i = 0; i < 7; i++) {
-        B[i] = precalc.B[i];
-        S[i] = precalc.S[i];
-        bmax[i] = precalc.bmax[i];
-        smax[i] = precalc.smax[i];
+        B[i] = precalc->B[i];
+        S[i] = precalc->S[i];
+        bmax[i] = precalc->bmax[i];
+        smax[i] = precalc->smax[i];
     }
-    B[7] = precalc.B[7];
-    S[7] = precalc.S[7];
+    B[7] = precalc->B[7];
+    S[7] = precalc->S[7];
 
-    return precalc.value;
+    return precalc->value;
 }
 
 /* CHNCHR is adapted from ANSI/AIM BC12-1998 Annex D Figure D5 and is Copyright (c) AIM 1997 */
@@ -672,14 +676,14 @@ static void CHNCHR(int channels, long target_value, int B[8], int S[8]) {
     int bmax[7], smax[7];
     long value = 0;
 
-    channel_copy_precalc(initial_precalcs[channels - 3], B, S, bmax, smax);
+    channel_copy_precalc(&initial_precalcs[channels - 3], B, S, bmax, smax);
 
 #ifndef CHANNEL_GENERATE_PRECALCS
     if (channels == 7 && target_value >= channel_precalcs7[0].value) {
-        value = channel_copy_precalc(channel_precalcs7[(target_value / channel_precalcs7[0].value) - 1], B, S, bmax,
+        value = channel_copy_precalc(&channel_precalcs7[(target_value / channel_precalcs7[0].value) - 1], B, S, bmax,
                                     smax);
     } else if (channels == 8 && target_value >= channel_precalcs8[0].value) {
-        value = channel_copy_precalc(channel_precalcs8[(target_value / channel_precalcs8[0].value) - 1], B, S, bmax,
+        value = channel_copy_precalc(&channel_precalcs8[(target_value / channel_precalcs8[0].value) - 1], B, S, bmax,
                                     smax);
     }
 #endif
@@ -840,7 +844,7 @@ INTERNAL int vin(struct zint_symbol *symbol, unsigned char source[], int length)
     char output_check;
     int sum;
     int i;
-    static const int weight[17] = {8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2};
+    static const char weight[17] = { 8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2 };
 
     /* Check length */
     if (length != 17) {
@@ -896,7 +900,7 @@ INTERNAL int vin(struct zint_symbol *symbol, unsigned char source[], int length)
     }
 
     /* Start character */
-    memcpy(d, "1211212111", 10);
+    memcpy(d, C39Table[43], 10);
     d += 10;
 
     /* Import character 'I' prefix? */
@@ -911,7 +915,7 @@ INTERNAL int vin(struct zint_symbol *symbol, unsigned char source[], int length)
     }
 
     /* Stop character */
-    memcpy(d, "121121211", 9);
+    memcpy(d, C39Table[43], 9);
     d += 9;
 
     expand(symbol, dest, d - dest);

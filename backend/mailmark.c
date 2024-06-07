@@ -1,7 +1,7 @@
 /* mailmark.c - Royal Mail 4-state and 2D Mailmark barcodes */
 /*
     libzint - the open source barcode library
-    Copyright (C) 2008-2023 Robin Stuart <rstuart114@gmail.com>
+    Copyright (C) 2008-2024 Robin Stuart <rstuart114@gmail.com>
 
     Redistribution and use in source and binary forms, with or without
     modification, are permitted provided that the following conditions
@@ -72,11 +72,11 @@ static const unsigned char mailmark_data_symbol_even[30] = {
     0x33, 0x35, 0x36, 0x39, 0x3A, 0x3C
 };
 
-static const unsigned short mailmark_extender_group_c[22] = {
+static const unsigned char mailmark_extender_group_c[22] = {
     3, 5, 7, 11, 13, 14, 16, 17, 19, 0, 1, 2, 4, 6, 8, 9, 10, 12, 15, 18, 20, 21
 };
 
-static const unsigned short mailmark_extender_group_l[26] = {
+static const unsigned char mailmark_extender_group_l[26] = {
     2, 5, 7, 8, 13, 14, 15, 16, 21, 22, 23, 0, 1, 3, 4, 6, 9, 10, 11, 12, 17, 18, 19, 20, 24, 25
 };
 
@@ -497,10 +497,12 @@ INTERNAL int mailmark_4s(struct zint_symbol *symbol, unsigned char source[], int
            Using recommended 1.9mm and 1.3mm heights for Ascender/Descenders and Trackers resp. as defaults
            Min height 4.22mm * 39 (max pitch) / 25.4mm ~ 6.47, max height 5.84mm * 47 (min pitch) / 25.4mm ~ 10.8
          */
-        symbol->row_height[0] = stripf((1.9f * 42.3f) / 25.4f); /* ~3.16 */
-        symbol->row_height[1] = stripf((1.3f * 42.3f) / 25.4f); /* ~2.16 */
+        const float min_height = 6.47952747f; /* (4.22 * 39) / 25.4 */
+        const float max_height = 10.8062992f; /* (5.84 * 47) / 25.4 */
+        symbol->row_height[0] = 3.16417313f; /* (1.9 * 42.3) / 25.4 */
+        symbol->row_height[1] = 2.16496062f; /* (1.3 * 42.3) / 25.4 */
         /* Note using max X for minimum and min X for maximum */
-        error_number = daft_set_height(symbol, stripf((4.22f * 39) / 25.4f), stripf((5.84f * 47) / 25.4f));
+        error_number = daft_set_height(symbol, min_height, max_height);
     } else {
         symbol->row_height[0] = 4.0f;
         symbol->row_height[1] = 2.0f;

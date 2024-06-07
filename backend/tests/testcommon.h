@@ -57,7 +57,7 @@ extern "C" {
 #define testutil_pclose(stream) _pclose(stream)
 #else
 #include <unistd.h>
-#  if defined(ZINT_IS_C89)
+#  if defined(ZINT_IS_C89) || defined(ZINT_IS_C99)
     extern FILE *popen(const char *command, const char *type);
     extern int pclose(FILE *stream);
 #  endif
@@ -65,7 +65,7 @@ extern "C" {
 #define testutil_pclose(stream) pclose(stream)
 #endif
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__GNUC__)
 #  pragma GCC diagnostic ignored "-Wpedantic"
 #  pragma GCC diagnostic ignored "-Woverlength-strings"
 #elif defined(_MSC_VER)
@@ -105,7 +105,7 @@ typedef struct s_testFunction {
 void testRun(int argc, char *argv[], testFunction funcs[], int funcs_size);
 int testContinue(const testCtx *const p_ctx, const int i);
 
-#if (defined(_MSC_VER) &&_MSC_VER == 1200) || defined(ZINT_IS_C89) /* VC6 or C89 */
+#if (defined(_MSC_VER) &&_MSC_VER <= 1200) || defined(ZINT_IS_C89) /* VC6 or C89 */
 void assert_zero(int exp, const char *fmt, ...);
 void assert_nonzero(int exp, const char *fmt, ...);
 void assert_null(const void *exp, const char *fmt, ...);
@@ -138,7 +138,7 @@ int testUtilSetSymbol(struct zint_symbol *symbol, int symbology, int input_mode,
 const char *testUtilBarcodeName(int symbology);
 const char *testUtilErrorName(int error_number);
 const char *testUtilInputModeName(int input_mode);
-const char *testUtilOption3Name(int option_3);
+const char *testUtilOption3Name(int symbology, int option_3);
 const char *testUtilOutputOptionsName(int output_options);
 
 int testUtilDAFTConvert(const struct zint_symbol *symbol, char *buffer, const int buffer_size);
@@ -174,6 +174,8 @@ int testUtilRmDir(const char *dirname);
 int testUtilRename(const char *oldpath, const char *newpath);
 int testUtilCreateROFile(const char *filename);
 int testUtilRmROFile(const char *filename);
+int testUtilReadFile(const char *filename, unsigned char *buffer, int buffer_size, int *p_size);
+int testUtilWriteFile(const char *filename, const unsigned char *buffer, const int buffer_size, const char *mode);
 
 int testUtilCmpPngs(const char *file1, const char *file2);
 int testUtilCmpTxts(const char *txt1, const char *txt2);

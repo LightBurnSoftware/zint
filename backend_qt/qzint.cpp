@@ -1,7 +1,7 @@
 /***************************************************************************
  *   Copyright (C) 2008 by BogDan Vatra                                    *
  *   bogdan@licentia.eu                                                    *
- *   Copyright (C) 2010-2023 Robin Stuart                                  *
+ *   Copyright (C) 2010-2024 Robin Stuart                                  *
  *                                                                         *
  *   This program is free software: you can redistribute it and/or modify  *
  *   it under the terms of the GNU General Public License as published by  *
@@ -23,27 +23,30 @@
 #endif
 
 //#include <QDebug>
-#include "qzint.h"
-#include <math.h>
-#include <stdio.h>
 #include <QFontDatabase>
 #include <QFontMetrics>
 /* The following include is necessary to compile with Qt 5.15 on Windows; Qt 5.7 did not require it */
 #include <QPainterPath>
 #include <QRegularExpression>
+
+#include <math.h>
+#include <stdio.h>
+#include "qzint.h"
 #include "../backend/fonts/normal_ttf.h" /* Arimo */
 #include "../backend/fonts/upcean_ttf.h" /* OCR-B subset (digits, "<", ">") */
 
 // Shorthand
-#define QSL QStringLiteral
+#define QSL     QStringLiteral
+#define QSEmpty QLatin1String("")
 
 namespace Zint {
     static const int maxSegs = 256;
     static const int maxCLISegs = 10; /* CLI restricted to 10 segments (including main data) */
 
     /* Matches RGB(A) hex string or CMYK decimal "C,M,Y,K" percentage string */
-    static const QRegularExpression colorRE(
+    static const QString colorREstr(
                                 QSL("^([0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?)|(((100|[0-9]{0,2}),){3}(100|[0-9]{0,2}))$"));
+    Q_GLOBAL_STATIC_WITH_ARGS(QRegularExpression, colorRE, (colorREstr))
 
     static const QString normalFontFamily = QSL("Arimo"); /* Sans-serif metrically compatible with Arial */
     static const QString upceanFontFamily = QSL("OCRB"); /* Monospace OCR-B */
@@ -175,7 +178,7 @@ namespace Zint {
             m_scale(1.0f),
             m_dotty(false), m_dot_size(4.0f / 5.0f),
             m_guardDescent(5.0f),
-            m_textGap(0.0f),
+            m_textGap(1.0f),
             m_fgStr(QSL("000000")), m_bgStr(QSL("FFFFFF")), m_cmyk(false),
             m_borderType(0), m_borderWidth(0),
             m_whitespace(0), m_vwhitespace(0),
@@ -209,7 +212,7 @@ namespace Zint {
         m_lastError.clear();
 
         if (m_zintSymbol) {
-            ZBarcode_Clear(m_zintSymbol);
+            ZBarcode_Reset(m_zintSymbol);
         } else if (!(m_zintSymbol = ZBarcode_Create())) {
             m_error = ZINT_ERROR_MEMORY;
             m_lastError = QSL("Insufficient memory for Zint structure");
@@ -464,7 +467,7 @@ namespace Zint {
             memset(m_structapp.id, 0, sizeof(m_structapp.id));
             if (!id.isEmpty()) {
                 QByteArray idArr = id.toLatin1();
-#if defined(__GNUC__) && !defined(__clang__)
+#if defined(__GNUC__) && __GNUC__ >= 8 && !defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wstringop-truncation"
 #endif
@@ -488,7 +491,7 @@ namespace Zint {
     }
 
     bool QZint::setFgStr(const QString& fgStr) {
-        if (fgStr.indexOf(colorRE) == 0) {
+        if (fgStr.indexOf(*colorRE) == 0) {
             m_fgStr = fgStr;
             return true;
         }
@@ -510,7 +513,7 @@ namespace Zint {
     }
 
     bool QZint::setBgStr(const QString& bgStr) {
-        if (bgStr.indexOf(colorRE) == 0) {
+        if (bgStr.indexOf(*colorRE) == 0) {
             m_bgStr = bgStr;
             return true;
         }
@@ -615,7 +618,7 @@ namespace Zint {
         m_textGap = textGap;
     }
 
-    /* Show (true) or hide (false) Human Readable Text */
+    /* Show (true) or hide (false) Human Readable Text (HRT) */
     bool QZint::showText() const {
         return m_show_hrt;
     }
@@ -795,10 +798,10 @@ namespace Zint {
     }
 
     /* Legacy property getters/setters */
-    void QZint::setWidth(int width) { setOption1(width); }
-    int QZint::width() const { return m_option_1; }
-    void QZint::setSecurityLevel(int securityLevel) { setOption2(securityLevel); }
-    int QZint::securityLevel() const { return m_option_2; }
+    void QZint::setWidth(int width) { setOption2(width); }
+    int QZint::width() const { return m_option_2; }
+    void QZint::setSecurityLevel(int securityLevel) { setOption1(securityLevel); }
+    int QZint::securityLevel() const { return m_option_1; }
     void QZint::setPdf417CodeWords(int /*pdf417CodeWords*/) {}
     int QZint::pdf417CodeWords() const { return 0; }
     void QZint::setHideText(bool hide) { setShowText(!hide); }
@@ -817,8 +820,12 @@ namespace Zint {
         return ZBarcode_Cap(symbology ? symbology : m_symbol, ZINT_CAP_STACKABLE);
     }
 
-    bool QZint::isExtendable(int symbology) const {
-        return ZBarcode_Cap(symbology ? symbology : m_symbol, ZINT_CAP_EXTENDABLE);
+    bool QZint::isEANUPC(int symbology) const {
+        return ZBarcode_Cap(symbology ? symbology : m_symbol, ZINT_CAP_EANUPC);
+    }
+
+    bool QZint::isExtendable(int symbology) const { /* Legacy - same as `isEANUPC()` */
+        return ZBarcode_Cap(symbology ? symbology : m_symbol, ZINT_CAP_EANUPC);
     }
 
     bool QZint::isComposite(int symbology) const {
@@ -1115,8 +1122,8 @@ namespace Zint {
             QPen p;
             p.setColor(fgColor);
             painter.setPen(p);
-            bool bold = (m_zintSymbol->output_options & BOLD_TEXT) && !isExtendable();
-            QFont font(isExtendable() ? upceanFontFamily : normalFontFamily, -1 /*pointSize*/,
+            bool bold = (m_zintSymbol->output_options & BOLD_TEXT) && !isEANUPC();
+            QFont font(isEANUPC() ? upceanFontFamily : normalFontFamily, -1 /*pointSize*/,
                         bold ? QFont::Bold : -1);
             while (string) {
                 font.setPixelSize(string->fsize);
@@ -1191,7 +1198,7 @@ namespace Zint {
         if (ZBarcode_BarcodeName(symbology, buf) == 0) {
             return QString(buf);
         }
-        return QSL("");
+        return QSEmpty;
     }
 
     /* Whether Zint library "libzint" built with PNG support or not */
@@ -1223,7 +1230,7 @@ namespace Zint {
             arg_int(cmd, longOptOnly ? "--barcode=" : "-b ", m_symbol);
         }
 
-        if (isExtendable()) {
+        if (isEANUPC()) {
             arg_int(cmd, "--addongap=", option2());
         }
 
@@ -1254,7 +1261,7 @@ namespace Zint {
         if (!default_bind_top) {
             arg_bool(cmd, "--bindtop", borderType() & BARCODE_BIND_TOP);
         }
-        arg_bool(cmd, "--bold", !notext && (fontSetting() & BOLD_TEXT) && !isExtendable());
+        arg_bool(cmd, "--bold", !notext && (fontSetting() & BOLD_TEXT) && !isEANUPC());
         if (!default_border) {
             arg_int(cmd, "--border=", borderWidth());
         }
@@ -1286,7 +1293,8 @@ namespace Zint {
         }
 
         if (m_symbol == BARCODE_DATAMATRIX || m_symbol == BARCODE_HIBC_DM) {
-            arg_bool(cmd, "--dmre", option3() == DM_DMRE);
+            arg_bool(cmd, "--dmiso144", (option3() & DM_ISO_144) == DM_ISO_144);
+            arg_bool(cmd, "--dmre", (option3() & 0x7F) == DM_DMRE);
         }
 
         if ((m_symbol == BARCODE_DOTCODE || (isDotty() && dotty())) && dotSize() != 0.8f) {
@@ -1316,10 +1324,10 @@ namespace Zint {
             arg_bool(cmd, "--gssep", gsSep());
         }
 
-        if (isExtendable() && guardDescent() != 5.0f) {
+        if (isEANUPC() && guardDescent() != 5.0f) {
             arg_float(cmd, "--guarddescent=", guardDescent(), true /*allowZero*/);
         }
-        if (isExtendable() && showText()) {
+        if (isEANUPC() && showText()) {
             arg_bool(cmd, "--guardwhitespace", guardWhitespace());
         }
 
@@ -1388,14 +1396,14 @@ namespace Zint {
         arg_bool(cmd, "--small", !notext && (fontSetting() & SMALL_TEXT));
 
         if (m_symbol == BARCODE_DATAMATRIX || m_symbol == BARCODE_HIBC_DM) {
-            arg_bool(cmd, "--square", option3() == DM_SQUARE);
+            arg_bool(cmd, "--square", (option3() & 0x7F) == DM_SQUARE);
         }
 
         if (supportsStructApp()) {
             arg_structapp(cmd, "--structapp=", structAppCount(), structAppIndex(), structAppID(), win);
         }
 
-        if (!notext && textGap() != 0.0f) {
+        if (!notext && textGap() != 1.0f) {
             arg_float(cmd, "--textgap=", textGap(), true /*allowZero*/);
         }
 

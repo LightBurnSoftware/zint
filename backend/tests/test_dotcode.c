@@ -1,6 +1,6 @@
 /*
     libzint - the open source barcode library
-    Copyright (C) 2019-2022 Robin Stuart <rstuart114@gmail.com>
+    Copyright (C) 2019-2024 Robin Stuart <rstuart114@gmail.com>
 
     Redistribution and use in source and binary forms, with or without
     modification, are permitted provided that the following conditions
@@ -51,11 +51,11 @@ static void test_large(const testCtx *const p_ctx) {
     };
     int data_size = ARRAY_SIZE(data);
     int i, length, ret;
-    struct zint_symbol *symbol;
+    struct zint_symbol *symbol = NULL;
 
     char data_buf[4096];
 
-    testStart("test_large");
+    testStartSymbol("test_large", &symbol);
 
     for (i = 0; i < data_size; i++) {
 
@@ -119,9 +119,9 @@ static void test_options(const testCtx *const p_ctx) {
     };
     int data_size = ARRAY_SIZE(data);
     int i, length, ret;
-    struct zint_symbol *symbol;
+    struct zint_symbol *symbol = NULL;
 
-    testStart("test_options");
+    testStartSymbol("test_options", &symbol);
 
     for (i = 0; i < data_size; i++) {
 
@@ -212,7 +212,7 @@ static void test_input(const testCtx *const p_ctx) {
     };
     int data_size = ARRAY_SIZE(data);
     int i, length, ret;
-    struct zint_symbol *symbol;
+    struct zint_symbol *symbol = NULL;
 
     char escaped[1024];
     char cmp_buf[32768];
@@ -221,7 +221,7 @@ static void test_input(const testCtx *const p_ctx) {
     int do_bwipp = (debug & ZINT_DEBUG_TEST_BWIPP) && testUtilHaveGhostscript(); /* Only do BWIPP test if asked, too slow otherwise */
     int do_zxingcpp = (debug & ZINT_DEBUG_TEST_ZXINGCPP) && testUtilHaveZXingCPPDecoder(); /* Only do ZXing-C++ test if asked, too slow otherwise */
 
-    testStart("test_input");
+    testStartSymbol("test_input", &symbol);
 
     for (i = 0; i < data_size; i++) {
 
@@ -1079,7 +1079,7 @@ static void test_encode(const testCtx *const p_ctx) {
     };
     int data_size = ARRAY_SIZE(data);
     int i, length, ret;
-    struct zint_symbol *symbol;
+    struct zint_symbol *symbol = NULL;
 
     char escaped[1024];
     char cmp_buf[8192];
@@ -1088,7 +1088,7 @@ static void test_encode(const testCtx *const p_ctx) {
     int do_bwipp = (debug & ZINT_DEBUG_TEST_BWIPP) && testUtilHaveGhostscript(); /* Only do BWIPP test if asked, too slow otherwise */
     int do_zxingcpp = (debug & ZINT_DEBUG_TEST_ZXINGCPP) && testUtilHaveZXingCPPDecoder(); /* Only do ZXing-C++ test if asked, too slow otherwise */
 
-    testStart("test_encode");
+    testStartSymbol("test_encode", &symbol);
 
     for (i = 0; i < data_size; i++) {
 
@@ -1107,7 +1107,8 @@ static void test_encode(const testCtx *const p_ctx) {
 
         if (p_ctx->generate) {
             printf("        /*%3d*/ { %s, %d, %s, { %d, %d, \"%s\" }, \"%s\", %d, %s, %d, %d, %d, %d, \"%s\",\n",
-                    i, testUtilInputModeName(data[i].input_mode), data[i].option_2, testUtilOption3Name(data[i].option_3),
+                    i, testUtilInputModeName(data[i].input_mode), data[i].option_2,
+                    testUtilOption3Name(BARCODE_DOTCODE, data[i].option_3),
                     data[i].structapp.index, data[i].structapp.count, data[i].structapp.id,
                     testUtilEscape(data[i].data, length, escaped, sizeof(escaped)), data[i].length,
                     testUtilErrorName(data[i].ret), symbol->rows, symbol->width, data[i].bwipp_cmp, data[i].zxingcpp_cmp, data[i].comment);
@@ -1458,7 +1459,7 @@ static void test_encode_segs(const testCtx *const p_ctx) {
     };
     int data_size = ARRAY_SIZE(data);
     int i, j, seg_count, ret;
-    struct zint_symbol *symbol;
+    struct zint_symbol *symbol = NULL;
 
     char escaped[1024];
     char cmp_buf[8192];
@@ -1467,7 +1468,7 @@ static void test_encode_segs(const testCtx *const p_ctx) {
     int do_bwipp = (debug & ZINT_DEBUG_TEST_BWIPP) && testUtilHaveGhostscript(); /* Only do BWIPP test if asked, too slow otherwise */
     int do_zxingcpp = (debug & ZINT_DEBUG_TEST_ZXINGCPP) && testUtilHaveZXingCPPDecoder(); /* Only do ZXing-C++ test if asked, too slow otherwise */
 
-    testStart("test_encode_segs");
+    testStartSymbol("test_encode_segs", &symbol);
 
     for (i = 0; i < data_size; i++) {
 
@@ -1493,7 +1494,8 @@ static void test_encode_segs(const testCtx *const p_ctx) {
             int length1 = data[i].segs[1].length == -1 ? (int) ustrlen(data[i].segs[1].source) : data[i].segs[1].length;
             int length2 = data[i].segs[2].length == -1 ? (int) ustrlen(data[i].segs[2].source) : data[i].segs[2].length;
             printf("        /*%3d*/ { %s, %d, %s, { %d, %d, \"%s\" }, { { TU(\"%s\"), %d, %d }, { TU(\"%s\"), %d, %d }, { TU(\"%s\"), %d, %d } }, %s, %d, %d, %d, %d, \"%s\",\n",
-                    i, testUtilInputModeName(data[i].input_mode), data[i].option_2, testUtilOption3Name(data[i].option_3),
+                    i, testUtilInputModeName(data[i].input_mode), data[i].option_2,
+                    testUtilOption3Name(BARCODE_DOTCODE, data[i].option_3),
                     data[i].structapp.index, data[i].structapp.count, data[i].structapp.id,
                     testUtilEscape((const char *) data[i].segs[0].source, length, escaped, sizeof(escaped)), data[i].segs[0].length, data[i].segs[0].eci,
                     testUtilEscape((const char *) data[i].segs[1].source, length1, escaped1, sizeof(escaped1)), data[i].segs[1].length, data[i].segs[1].eci,
@@ -1559,15 +1561,15 @@ static void test_fuzz(const testCtx *const p_ctx) {
     int debug = p_ctx->debug;
 
     struct item {
+        int input_mode;
         char *data;
         int length;
-        int input_mode;
         int ret;
     };
     /* s/\/\*[ 0-9]*\*\//\=printf("\/\*%3d*\/", line(".") - line("'<")): */
     struct item data[] = {
-        /*  0*/ { "(\207'", -1, DATA_MODE, 0 }, /* 0x28,0x87,0x27 Note: should but doesn't trigger sanitize error if no length check, for some reason; UPDATE: use up-to-date gcc (9)! */
-        /*  1*/ {
+        /*  0*/ { DATA_MODE, "(\207'", -1, 0 }, /* 0x28,0x87,0x27 Note: should but doesn't trigger sanitize error if no length check, for some reason; UPDATE: use up-to-date gcc (9)! */
+        /*  1*/ { DATA_MODE,
                     "\133\061\106\133\061\106\070\161\116\133\116\116\067\040\116\016\000\116\125\111\125\125\316\125\125\116\116\116\116\117\116\125"
                     "\111\125\103\316\125\125\116\116\116\116\117\000\000\116\136\116\116\001\116\316\076\116\116\057\136\116\116\134\000\000\116\116"
                     "\116\230\116\116\116\116\125\125\125\257\257\257\000\001\116\130\212\212\212\212\212\212\212\377\377\210\212\212\177\000\212\212"
@@ -1582,18 +1584,18 @@ static void test_fuzz(const testCtx *const p_ctx) {
                     "\071\071\071\071\071\072\071\071\277\071\071\077\071\071\071\071\071\071\071\071\154\071\071\071\071\071\071\071\071\071\071\071"
                     "\071\071\071\011\071\071\071\071\071\071\071\071\071\071\071\071\071\071\105\105\105\105\105\105\105\105\105\105\105\105\105\071"
                     "\071\071\071\071\071", /* Original OSS-Fuzz triggering data for index out of bounds (encoding of HT/FS/GS/RS when shifting to code set B) */
-                    421, DATA_MODE, 0 },
-        /*  2*/ { "\233:", -1, DATA_MODE, 0 }, /* Original OSS-Fuzz triggering data for codeword_array buffer overflow, L777 */
-        /*  3*/ { "\241\034", -1, DATA_MODE, 0 }, /* As above L793 */
-        /*  4*/ { "\270\036", -1, DATA_MODE, 0 }, /* As above L799 */
-        /*  5*/ { "\237\032", -1, DATA_MODE, 0 }, /* As above L904 */
-        /*  6*/ { "\237", -1, DATA_MODE, 0 }, /* As above L1090 */
+                    421, 0 },
+        /*  2*/ { DATA_MODE, "\233:", -1, 0 }, /* Original OSS-Fuzz triggering data for codeword_array buffer overflow, L777 */
+        /*  3*/ { DATA_MODE, "\241\034", -1, 0 }, /* As above L793 */
+        /*  4*/ { DATA_MODE, "\270\036", -1, 0 }, /* As above L799 */
+        /*  5*/ { DATA_MODE, "\237\032", -1, 0 }, /* As above L904 */
+        /*  6*/ { DATA_MODE, "\237", -1, 0 }, /* As above L1090 */
     };
     int data_size = ARRAY_SIZE(data);
     int i, length, ret;
-    struct zint_symbol *symbol;
+    struct zint_symbol *symbol = NULL;
 
-    testStart("test_fuzz");
+    testStartSymbol("test_fuzz", &symbol);
 
     for (i = 0; i < data_size; i++) {
 

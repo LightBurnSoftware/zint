@@ -2,7 +2,7 @@
 /* Update Zint version number in various files */
 /*
     libzint - the open source barcode library
-    Copyright (C) 2020-2022 Robin Stuart <rstuart114@gmail.com>
+    Copyright (C) 2020-2023 Robin Stuart <rstuart114@gmail.com>
 */
 /* SPDX-License-Identifier: BSD-3-Clause */
 
@@ -52,6 +52,8 @@ if ($build) {
 $rc_str1 = "$major,$minor,$release,$build";
 $rc_str2 = "$major.$minor.$release.$build";
 
+$year = date("Y");
+
 /* `$to_do` is no. of lines that should get replaced/changed, not no. of replacements */
 function version_replace($to_do, $file, $match_pattern, $replace_pattern, $replace_str) {
     global $basename;
@@ -83,7 +85,7 @@ function version_replace($to_do, $file, $match_pattern, $replace_pattern, $repla
     }
 }
 
-function rc_replace($file, $rc_str1, $rc_str2) {
+function rc_replace($file, $rc_str1, $rc_str2, $year = '') {
     global $basename;
 
     if (($get = file_get_contents($file)) === false) {
@@ -116,6 +118,53 @@ function rc_replace($file, $rc_str1, $rc_str2) {
     }
     if ($done !== 2) {
         exit("$basename: ERROR: Only did $done replacements of 2 in file \"$file\"" . PHP_EOL);
+    }
+    if ($year !== '') {
+        $match_pattern = '/VALUE[ \t]+"LegalCopyright",[ \t]+"Copyright /';
+        $done = 0;
+        foreach ($lines as $li => $line) {
+            if (preg_match($match_pattern, $line)) {
+                $cnt = 0;
+                $lines[$li] = preg_replace('/[0-9]+/', $year, $line, 1, $cnt);
+                if ($cnt === 0 || $lines[$li] === NULL) {
+                    exit("$basename: ERROR: Could not replace \"$match_pattern\" in file \"$file\"" . PHP_EOL);
+                }
+                $done++;
+                break;
+            }
+        }
+        if ($done !== 1) {
+            exit("$basename: ERROR: Failed to replace Copyright year in file \"$file\"" . PHP_EOL);
+        }
+    }
+    if (!file_put_contents($file, implode("\n", $lines))) {
+        exit("$basename: ERROR: Could not write file \"$file\"" . PHP_EOL);
+    }
+}
+
+function year_replace($file, $year) {
+    global $basename;
+
+    if (($get = file_get_contents($file)) === false) {
+        exit("$basename: ERROR: Could not read file \"$file\"" . PHP_EOL);
+    }
+
+    $match_pattern = '/Copyright /';
+    $lines = explode("\n", $get);
+    $done = 0;
+    foreach ($lines as $li => $line) {
+        if (preg_match($match_pattern, $line)) {
+            $cnt = 0;
+            $lines[$li] = preg_replace('/[0-9]+/', $year, $line, 1, $cnt);
+            if ($cnt === 0 || $lines[$li] === NULL) {
+                exit("$basename: ERROR: Could not replace \"$match_pattern\" in file \"$file\"" . PHP_EOL);
+            }
+            $done++;
+            break;
+        }
+    }
+    if ($done !== 1) {
+        exit("$basename: ERROR: Failed to replace Copyright year in file \"$file\"" . PHP_EOL);
     }
     if (!file_put_contents($file, implode("\n", $lines))) {
         exit("$basename: ERROR: Could not write file \"$file\"" . PHP_EOL);
@@ -167,7 +216,7 @@ version_replace(1, $data_dirname . 'zint.nsi', '/^!define +PRODUCT_VERSION/', '/
 
 // backend/libzint.rc
 
-rc_replace($data_dirname . 'backend/libzint.rc', $rc_str1, $rc_str2);
+rc_replace($data_dirname . 'backend/libzint.rc', $rc_str1, $rc_str2, $year);
 
 // backend/zintconfig.h
 
@@ -223,9 +272,13 @@ version_replace(2, $data_dirname . 'backend_tcl/zint_tcl.dsp', '/ZINT_VERSION="\
 
 version_replace(1, $data_dirname . 'backend_tcl/lib/zint/pkgIndex.tcl', '/zint /', '/zint [0-9.]+/', 'zint ' . $v_base_str . '');
 
+// backend_tcl/licence.txt
+
+year_replace($data_dirname . 'backend_tcl/licence.txt', $year);
+
 // frontend/zint.rc
 
-rc_replace($data_dirname . 'frontend/zint.rc', $rc_str1, $rc_str2);
+rc_replace($data_dirname . 'frontend/zint.rc', $rc_str1, $rc_str2, $year);
 
 // frontend/Makefile.mingw
 
@@ -253,7 +306,7 @@ version_replace(1, $data_dirname . 'docs/zint.1.pmd', '/^% ZINT\(1\) Version /',
 
 // frontend_qt/res/qtZint.rc
 
-rc_replace($data_dirname . 'frontend_qt/res/qtZint.rc', $rc_str1, $rc_str2);
+rc_replace($data_dirname . 'frontend_qt/res/qtZint.rc', $rc_str1, $rc_str2, $year);
 
 // win32/libzint.vcxproj
 
@@ -265,7 +318,7 @@ version_replace(2, $data_dirname . 'win32/zint.vcxproj', '/ZINT_VERSION="/', '/Z
 
 // win32/zint_cmdline_vc6/zint.rc
 
-rc_replace($data_dirname . 'win32/zint_cmdline_vc6/zint.rc', $rc_str1, $rc_str2);
+rc_replace($data_dirname . 'win32/zint_cmdline_vc6/zint.rc', $rc_str1, $rc_str2, $year);
 
 // win32/zint_cmdline_vc6/zint_cmdline_vc6.dsp
 
@@ -273,11 +326,11 @@ version_replace(2, $data_dirname . 'win32/zint_cmdline_vc6/zint_cmdline_vc6.dsp'
 
 // win32/vs2008/libzint.vcproj
 
-version_replace(3, $data_dirname . 'win32/vs2008/libzint.vcproj', '/ZINT_VERSION=&quot;/', '/&quot;[0-9.]+/', '&quot;' . $v_str);
+version_replace(2, $data_dirname . 'win32/vs2008/libzint.vcproj', '/ZINT_VERSION=&quot;/', '/&quot;[0-9.]+/', '&quot;' . $v_str);
 
 // win32/vs2008/zint.vcproj
 
-version_replace(3, $data_dirname . 'win32/vs2008/zint.vcproj', '/ZINT_VERSION=&quot;/', '/&quot;[0-9.]+/', '&quot;' . $v_str);
+version_replace(2, $data_dirname . 'win32/vs2008/zint.vcproj', '/ZINT_VERSION=&quot;/', '/&quot;[0-9.]+/', '&quot;' . $v_str);
 
 // win32/vs2015/libzint.vcxproj
 
@@ -287,9 +340,13 @@ version_replace(6, $data_dirname . 'win32/vs2015/libzint.vcxproj', '/ZINT_VERSIO
 
 version_replace(6, $data_dirname . 'win32/vs2015/zint.vcxproj', '/ZINT_VERSION="/', '/ZINT_VERSION="[0-9.]+"/', 'ZINT_VERSION="' . $v_str . '"');
 
-// win32/vs2015/vsx/libzintMD.vcxproj
+// win32/vs2017/libzint.vcxproj
 
-version_replace(1, $data_dirname . 'win32/vs2015/vsx/libzintMD.vcxproj', '/ZINT_VERSION="/', '/ZINT_VERSION="[0-9.]+"/', 'ZINT_VERSION="' . $v_str . '"');
+version_replace(2, $data_dirname . 'win32/vs2017/libzint.vcxproj', '/ZINT_VERSION="/', '/ZINT_VERSION="[0-9.]+"/', 'ZINT_VERSION="' . $v_str . '"');
+
+// win32/vs2017/zint.vcxproj
+
+version_replace(2, $data_dirname . 'win32/vs2017/zint.vcxproj', '/ZINT_VERSION="/', '/ZINT_VERSION="[0-9.]+"/', 'ZINT_VERSION="' . $v_str . '"');
 
 // win32/vs2019/libzint.vcxproj
 

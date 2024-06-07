@@ -1,7 +1,7 @@
 /* imail.c - Handles Intelligent Mail (aka OneCode) for USPS */
 /*
     libzint - the open source barcode library
-    Copyright (C) 2008-2023 Robin Stuart <rstuart114@gmail.com>
+    Copyright (C) 2008-2024 Robin Stuart <rstuart114@gmail.com>
 
     Redistribution and use in source and binary forms, with or without
     modification, are permitted provided that the following conditions
@@ -33,7 +33,6 @@
 /*  The function "USPS_MSB_Math_CRC11GenerateFrameCheckSequence"
     is Copyright (C) 2006 United States Postal Service */
 
-#include <stdio.h>
 #include "common.h"
 #include "large.h"
 
@@ -41,8 +40,8 @@
 
 /* The following lookup tables were generated using the code in Appendix C */
 
+/* Appendix D Table 1 - 5 of 13 characters */
 static const unsigned short AppxD_I[1287] = {
-    /* Appendix D Table 1 - 5 of 13 characters */
     0x001F, 0x1F00, 0x002F, 0x1E80, 0x0037, 0x1D80, 0x003B, 0x1B80, 0x003D, 0x1780,
     0x003E, 0x0F80, 0x004F, 0x1E40, 0x0057, 0x1D40, 0x005B, 0x1B40, 0x005D, 0x1740,
     0x005E, 0x0F40, 0x0067, 0x1CC0, 0x006B, 0x1AC0, 0x006D, 0x16C0, 0x006E, 0x0EC0,
@@ -174,8 +173,8 @@ static const unsigned short AppxD_I[1287] = {
     0x08E2, 0x064C, 0x0554, 0x04E4, 0x0358, 0x02E8, 0x01F0
 };
 
+/* Appendix D Table II - 2 of 13 characters */
 static const unsigned short AppxD_II[78] = {
-    /* Appendix D Table II - 2 of 13 characters */
     0x0003, 0x1800, 0x0005, 0x1400, 0x0006, 0x0C00, 0x0009, 0x1200, 0x000A, 0x0A00,
     0x000C, 0x0600, 0x0011, 0x1100, 0x0012, 0x0900, 0x0014, 0x0500, 0x0018, 0x0300,
     0x0021, 0x1080, 0x0022, 0x0880, 0x0024, 0x0480, 0x0028, 0x0280, 0x0030, 0x0180,
@@ -186,14 +185,15 @@ static const unsigned short AppxD_II[78] = {
     0x0801, 0x1002, 0x1001, 0x0802, 0x0404, 0x0208, 0x0110, 0x00A0
 };
 
-static const unsigned short AppxD_IV[130] = {
-    /* Appendix D Table IV - Bar-to-Character Mapping (reverse lookup) */
-    67, 6, 78, 16, 86, 95, 34, 40, 45, 113, 117, 121, 62, 87, 18, 104, 41, 76, 57, 119, 115, 72, 97,
-    2, 127, 26, 105, 35, 122, 52, 114, 7, 24, 82, 68, 63, 94, 44, 77, 112, 70, 100, 39, 30, 107,
-    15, 125, 85, 10, 65, 54, 88, 20, 106, 46, 66, 8, 116, 29, 61, 99, 80, 90, 37, 123, 51, 25, 84,
-    129, 56, 4, 109, 96, 28, 36, 47, 11, 71, 33, 102, 21, 9, 17, 49, 124, 79, 64, 91, 42, 69, 53,
-    60, 14, 1, 27, 103, 126, 75, 89, 50, 120, 19, 32, 110, 92, 111, 130, 59, 31, 12, 81, 43, 55,
-    5, 74, 22, 101, 128, 58, 118, 48, 108, 38, 98, 93, 23, 83, 13, 73, 3
+/* Appendix D Table IV - Bar-to-Character Mapping (reverse lookup) */
+static const unsigned char AppxD_IV[130] = {
+     67,   6, 78,  16,  86,  95,  34, 40,  45, 113, 117, 121, 62,  87, 18, 104,  41,  76, 57, 119,
+    115,  72, 97,   2, 127,  26, 105, 35, 122,  52, 114,   7, 24,  82, 68,  63,  94,  44, 77, 112,
+     70, 100, 39,  30, 107,  15, 125, 85,  10,  65,  54,  88, 20, 106, 46,  66,   8, 116, 29,  61,
+     99,  80, 90,  37, 123,  51,  25, 84, 129,  56,   4, 109, 96,  28, 36,  47,  11,  71, 33, 102,
+     21,   9, 17,  49, 124,  79,  64, 91,  42,  69,  53,  60, 14,   1, 27, 103, 126,  75, 89,  50,
+    120,  19, 32, 110,  92, 111, 130, 59,  31,  12,  81,  43, 55,   5, 74,  22, 101, 128, 58, 118,
+     48, 108, 38,  98,  93,  23,  83, 13,  73,   3
 };
 
 /***************************************************************************
@@ -247,7 +247,8 @@ INTERNAL int usps_imail(struct zint_symbol *symbol, unsigned char source[], int 
     char data_pattern[200];
     int error_number = 0;
     int i, j, read;
-    char zip[35], tracker[35], temp[2];
+    char tracker[33] = {0}; /* Zero to prevent false warning from clang-tidy */
+    char zip[33], temp[2];
     large_uint accum;
     large_uint byte_array_reg;
     unsigned char byte_array[13];
@@ -266,11 +267,9 @@ INTERNAL int usps_imail(struct zint_symbol *symbol, unsigned char source[], int 
         return ZINT_ERROR_INVALID_DATA;
     }
 
-    strcpy(zip, "");
-    strcpy(tracker, "");
-
     /* separate the tracking code from the routing code */
 
+    zip[0] = '\0';
     read = 0;
     j = 0;
     for (i = 0; i < length; i++) {
@@ -342,7 +341,7 @@ INTERNAL int usps_imail(struct zint_symbol *symbol, unsigned char source[], int 
 
     /* and then the rest */
 
-    for (read = 2, len = (int) strlen(tracker); read < len; read++) {
+    for (read = 2; read < 20; read++) {
 
         large_mul_u64(&accum, 10);
         large_add_u64(&accum, ctoi(tracker[read]));
@@ -407,7 +406,7 @@ INTERNAL int usps_imail(struct zint_symbol *symbol, unsigned char source[], int 
         }
     }
 
-    strcpy(data_pattern, "");
+    data_pattern[0] = '\0';
     temp[1] = '\0';
     for (i = 0; i < 65; i++) {
         j = 0;
@@ -439,10 +438,12 @@ INTERNAL int usps_imail(struct zint_symbol *symbol, unsigned char source[], int 
            Tracker 0.048" (average of 0.039" - 0.057")
            Ascender/descender 0.0965" (average of 0.082" - 0.111") less T = 0.0485"
          */
-        symbol->row_height[0] = stripf(0.0485f * 43); /* 2.0855 */
-        symbol->row_height[1] = stripf(0.048f * 43); /* 2.064 */
+        const float min_height = 4.875f; /* 0.125 * 39 */
+        const float max_height = 7.75500011f; /* 0.165 * 47 */
+        symbol->row_height[0] = 2.0855f; /* 0.0485 * 43 */
+        symbol->row_height[1] = 2.06399989f; /* 0.048 * 43 */
         /* Note using max X for minimum and min X for maximum */
-        error_number = daft_set_height(symbol, stripf(0.125f * 39) /*4.875*/, stripf(0.165f * 47) /*7.755*/);
+        error_number = daft_set_height(symbol, min_height, max_height);
     } else {
         symbol->row_height[0] = 3.0f;
         symbol->row_height[1] = 2.0f;

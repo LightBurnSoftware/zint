@@ -1,7 +1,7 @@
 /* common.h - Header for all common functions in common.c */
 /*
     libzint - the open source barcode library
-    Copyright (C) 2009-2023 Robin Stuart <rstuart114@gmail.com>
+    Copyright (C) 2009-2024 Robin Stuart <rstuart114@gmail.com>
 
     Redistribution and use in source and binary forms, with or without
     modification, are permitted provided that the following conditions
@@ -41,19 +41,36 @@ extern "C" {
 #define ARRAY_SIZE(x) ((int) (sizeof(x) / sizeof((x)[0])))
 #endif
 
-/* Determine if C89 (excluding MSVC, which doesn't define __STDC_VERSION__) */
-#if !defined(_MSC_VER) && (!defined(__STDC_VERSION__) || __STDC_VERSION__ < 199000L)
-#define ZINT_IS_C89
+/* Determine if C89 or C99 (excluding MSVC, which doesn't define __STDC_VERSION__) */
+#ifndef _MSC_VER
+#  if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 199000L
+#    define ZINT_IS_C89
+#  elif __STDC_VERSION__ <= 199901L /* Actually includes pseudo-standards "C94/C95" as well */
+#    define ZINT_IS_C99
+#  endif
 #endif
 
 #ifdef _MSC_VER
 #  include <malloc.h>
 #  define z_alloca(nmemb) _alloca(nmemb)
 #else
-#  if defined(ZINT_IS_C89) || defined(__NuttX__) /* C89 or NuttX RTOS */
+#  if defined(ZINT_IS_C89) || defined(ZINT_IS_C99) || defined(__NuttX__) || defined(_AIX) \
+        || (defined(__sun) && defined(__SVR4) /*Solaris*/)
 #    include <alloca.h>
 #  endif
 #  define z_alloca(nmemb) alloca(nmemb)
+#endif
+
+#ifdef _MSC_VER
+#  if _MSC_VER >= 1400 /* MSVC 2005 (C++ 8.0) */
+#    define restrict __restrict
+#  else
+#    define restrict
+#  endif
+#else
+#  ifdef ZINT_IS_C89
+#    define restrict
+#  endif
 #endif
 
 #ifdef _MSC_VER
@@ -106,7 +123,7 @@ typedef unsigned __int64 uint64_t;
 #define ustrcat(target, source) strcat((char *) (target), (const char *) (source))
 #define ustrncat(target, source, count) strncat((char *) (target), (const char *) (source), (count))
 
-#if (defined(_MSC_VER) && _MSC_VER == 1200) || defined(ZINT_IS_C89) /* VC6 or C89 */
+#if (defined(_MSC_VER) && _MSC_VER <= 1200) || defined(ZINT_IS_C89) /* VC6 or C89 */
 #  define ceilf (float) ceil
 #  define floorf (float) floor
 #  define fmodf (float) fmod
@@ -119,7 +136,7 @@ typedef unsigned __int64 uint64_t;
 
 #ifdef _MSC_VER
 #  pragma warning(disable: 4244) /* conversion from int to float */
-#  if _MSC_VER != 1200 /* VC6 */
+#  if _MSC_VER > 1200 /* VC6 */
 #    pragma warning(disable: 4996) /* function or variable may be unsafe */
 #  endif
 #endif
@@ -127,17 +144,17 @@ typedef unsigned __int64 uint64_t;
 /* Is float integral value? (https://stackoverflow.com/a/40404149) */
 #define isfintf(arg) (fmodf(arg, 1.0f) == 0.0f)
 
-#if (defined(__GNUC__) || defined(__clang__)) && !defined(ZINT_TEST) && !defined(__MINGW32__)
-#  define INTERNAL __attribute__ ((visibility ("hidden")))
+#if defined(__GNUC__) && __GNUC__ >= 4 && !defined(ZINT_TEST) && !defined(__MINGW32__)
+#  define INTERNAL __attribute__((__visibility__("hidden")))
 #elif defined(ZINT_TEST)
 #  define INTERNAL ZINT_EXTERN /* The test suite references INTERNAL functions, so they need to be exported */
 #else
 #  define INTERNAL
 #endif
 
-#if (defined(__GNUC__) || defined(__clang__)) && !defined(__MINGW32__)
-#  define INTERNAL_DATA_EXTERN __attribute__ ((visibility ("hidden"))) extern
-#  define INTERNAL_DATA __attribute__ ((visibility ("hidden")))
+#if defined(__GNUC__) && __GNUC__ >= 4 && !defined(__MINGW32__)
+#  define INTERNAL_DATA_EXTERN __attribute__((__visibility__("hidden"))) extern
+#  define INTERNAL_DATA __attribute__((__visibility__("hidden")))
 #else
 #  define INTERNAL_DATA_EXTERN extern
 #  define INTERNAL_DATA
@@ -218,8 +235,8 @@ INTERNAL void expand(struct zint_symbol *symbol, const char data[], const int le
 /* Whether `symbology` can have row binding */
 INTERNAL int is_stackable(const int symbology);
 
-/* Whether `symbology` can have add-on (EAN-2 and EAN-5) */
-INTERNAL int is_extendable(const int symbology);
+/* Whether `symbology` is EAN/UPC */
+INTERNAL int is_upcean(const int symbology);
 
 /* Whether `symbology` can have composite 2D component data */
 INTERNAL int is_composite(const int symbology);
@@ -272,19 +289,13 @@ INTERNAL void segs_cpy(const struct zint_symbol *symbol, const struct zint_seg s
                 struct zint_seg local_segs[]);
 
 
-/* Returns red component if any of ultra colour indexing "0CBMRYGKW" */
-INTERNAL int colour_to_red(const int colour);
-
-/* Returns green component if any of ultra colour indexing "0CBMRYGKW" */
-INTERNAL int colour_to_green(const int colour);
-
-/* Returns blue component if any of ultra colour indexing "0CBMRYGKW" */
-INTERNAL int colour_to_blue(const int colour);
-
+INTERNAL char *debug_print_escape(const unsigned char *source, const int first_len, char *buf);
 
 #ifdef ZINT_TEST
 /* Dumps hex-formatted codewords in symbol->errtxt (for use in testing) */
 INTERNAL void debug_test_codeword_dump(struct zint_symbol *symbol, const unsigned char *codewords, const int length);
+/* Dumps decimal-formatted codewords in symbol->errtxt (for use in testing) */
+INTERNAL void debug_test_codeword_dump_short(struct zint_symbol *symbol, const short *codewords, const int length);
 /* Dumps decimal-formatted codewords in symbol->errtxt (for use in testing) */
 INTERNAL void debug_test_codeword_dump_int(struct zint_symbol *symbol, const int *codewords, const int length);
 #endif

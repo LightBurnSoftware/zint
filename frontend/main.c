@@ -1,7 +1,7 @@
 /* main.c - Command line handling routines for Zint */
 /*
     libzint - the open source barcode library
-    Copyright (C) 2008-2023 Robin Stuart <rstuart114@gmail.com>
+    Copyright (C) 2008-2024 Robin Stuart <rstuart114@gmail.com>
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -25,35 +25,48 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef _MSC_VER
-#include <getopt.h>
-#include <zint.h>
+#if !defined(_MSC_VER) && !defined(__NetBSD__) && !defined(_AIX)
+#  include <getopt.h>
+#  include <zint.h>
 #else
-#include "../getopt/getopt.h"
-#include "zint.h"
-#if _MSC_VER != 1200 /* VC6 */
-#pragma warning(disable: 4996) /* function or variable may be unsafe */
+#  include "../getopt/getopt.h"
+#  ifdef _MSC_VER
+#    include "zint.h"
+#    if _MSC_VER > 1200 /* VC6 */
+#      pragma warning(disable: 4996) /* function or variable may be unsafe */
+#    endif
+#  else
+#    include <zint.h>
+#  endif
 #endif
-#endif /* _MSC_VER */
+
+/* Following copied from "backend/library.c" */
 
 /* It's assumed that int is at least 32 bits, the following will compile-time fail if not
  * https://stackoverflow.com/a/1980056 */
 typedef char static_assert_int_at_least_32bits[sizeof(int) * CHAR_BIT < 32 ? -1 : 1];
 
+/* Following copied from "backend/common.h" */
+
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(x) ((int) (sizeof(x) / sizeof((x)[0])))
 #endif
 
-/* Determine if C89 (excluding MSVC, which doesn't define __STDC_VERSION__) */
-#if !defined(_MSC_VER) && (!defined(__STDC_VERSION__) || __STDC_VERSION__ < 199000L)
-#define ZINT_IS_C89
+/* Determine if C89 or C99 (excluding MSVC, which doesn't define __STDC_VERSION__) */
+#ifndef _MSC_VER
+#  if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 199000L
+#    define ZINT_IS_C89
+#  elif __STDC_VERSION__ <= 199901L /* Actually includes pseudo-standards "C94/C95" as well */
+#    define ZINT_IS_C99
+#  endif
 #endif
 
 #ifdef _MSC_VER
 #  include <malloc.h>
 #  define z_alloca(nmemb) _alloca(nmemb)
 #else
-#  if defined(ZINT_IS_C89) || defined(__NuttX__) /* C89 or NuttX RTOS */
+#  if defined(ZINT_IS_C89) || defined(ZINT_IS_C99) || defined(__NuttX__) || defined(_AIX) \
+        || (defined(__sun) && defined(__SVR4) /*Solaris*/)
 #    include <alloca.h>
 #  endif
 #  define z_alloca(nmemb) alloca(nmemb)
@@ -159,17 +172,18 @@ static void usage(const int no_png) {
            "  --compliantheight     Warn if height not compliant, and use standard default\n"
            "  -d, --data=DATA       Set the symbol data content (segment 0)\n"
            "  --direct              Send output to stdout\n", stdout);
-    fputs( "  --dmre                Allow Data Matrix Rectangular Extended\n"
+    fputs( "  --dmiso144            Use ISO format for 144x144 Data Matrix symbols\n"
+           "  --dmre                Allow Data Matrix Rectangular Extended\n"
            "  --dotsize=NUMBER      Set radius of dots in dotty mode\n"
            "  --dotty               Use dots instead of squares for matrix symbols\n"
-           "  --dump                Dump hexadecimal representation to stdout\n"
-           "  -e, --ecinos          Display ECI (Extended Channel Interpretation) table\n", stdout);
-    fputs( "  --eci=INTEGER         Set the ECI code for the data (segment 0)\n"
+           "  --dump                Dump hexadecimal representation to stdout\n", stdout);
+    fputs( "  -e, --ecinos          Display ECI (Extended Channel Interpretation) table\n"
+           "  --eci=INTEGER         Set the ECI code for the data (segment 0)\n"
            "  --embedfont           Embed font in vector output (SVG only)\n"
            "  --esc                 Process escape sequences in input data\n"
-           "  --extraesc            Process symbology-specific escape sequences (Code 128)\n"
-           "  --fast                Use faster encodation or other shortcuts if available\n", stdout);
-    fputs( "  --fg=COLOUR           Specify a foreground colour (as RGB(A) or \"C,M,Y,K\")\n", stdout);
+           "  --extraesc            Process symbology-specific escape sequences (Code 128)\n", stdout);
+    fputs( "  --fast                Use faster encodation or other shortcuts if available\n"
+           "  --fg=COLOUR           Specify a foreground colour (as RGB(A) or \"C,M,Y,K\")\n", stdout);
     printf("  --filetype=TYPE       Set output file type BMP/EMF/EPS/GIF/PCX%s/SVG/TIF/TXT\n", no_png_type);
     fputs( "  --fullmultibyte       Use multibyte for binary/Latin (QR/Han Xin/Grid Matrix)\n"
            "  --gs1                 Treat input as GS1 compatible data\n"
@@ -273,11 +287,25 @@ static int validate_int(const char source[], int len, int *p_val) {
 
 /* Verifies that a string is a simplified form of floating point, max 7 significant decimal digits with
    optional decimal point. On success returns val in arg. On failure sets `errbuf` */
-static int validate_float(const char source[], float *p_val, char errbuf[64]) {
+static int validate_float(const char source[], const int allow_neg, float *p_val, char errbuf[64]) {
     static const float fract_muls[7] = { 0.1f, 0.01f, 0.001f, 0.0001f, 0.00001f, 0.000001f, 0.0000001f };
     int val = 0;
+    int neg = 0;
     const char *dot = strchr(source, '.');
-    int int_len = dot ? (int) (dot - source) : (int) strlen(source);
+    int int_len;
+
+    if (*source == '+' || *source == '-') {
+        if (*source == '-') {
+            if (!allow_neg) {
+                strcpy(errbuf, "negative value not permitted");
+                return 0;
+            }
+            neg = 1;
+        }
+        source++;
+    }
+
+    int_len = dot ? (int) (dot - source) : (int) strlen(source);
     if (int_len > 9) {
         strcpy(errbuf, "integer part must be 7 digits maximum"); /* Say 7 not 9 to "manage expections" */
         return 0;
@@ -323,6 +351,9 @@ static int validate_float(const char source[], float *p_val, char errbuf[64]) {
     } else {
         *p_val = (float) val;
     }
+    if (neg) {
+        *p_val = -*p_val;
+    }
     return 1;
 }
 
@@ -348,8 +379,8 @@ static void to_lower(char source[]) {
 
 /* Return symbology id if `barcode_name` a barcode name */
 static int get_barcode_name(const char *barcode_name) {
-    struct name { const int symbology; const char *n; };
-    static const struct name names[] = { /* Must be sorted for binary search to work */
+    /* Must be sorted for binary search to work */
+    static const struct { int symbology; const char *n; } names[] = {
         { BARCODE_C25LOGIC, "2of5datalogic" }, /* Synonym */
         { BARCODE_C25IATA, "2of5iata" }, /* Synonym */
         { BARCODE_C25IND, "2of5ind" }, /* Synonym */
@@ -503,6 +534,7 @@ static int get_barcode_name(const char *barcode_name) {
         { BARCODE_C25IND, "industrialcode2of5" }, /* Synonym */
         { BARCODE_C25INTER, "interleaved2of5" }, /* Synonym */
         { BARCODE_C25INTER, "interleavedcode2of5" }, /* Synonym */
+        { BARCODE_ISBNX, "isbn" }, /* Synonym */
         { BARCODE_ISBNX, "isbnx" },
         { BARCODE_ITF14, "itf14" },
         { BARCODE_JAPANPOST, "japanpost" },
@@ -605,7 +637,7 @@ static int get_barcode_name(const char *barcode_name) {
 
 /* Whether `filetype` supported by Zint. Sets `png_refused` if `no_png` and PNG requested */
 static int supported_filetype(const char *filetype, const int no_png, int *png_refused) {
-    static const char *filetypes[] = {
+    static const char filetypes[][4] = {
         "bmp", "emf", "eps", "gif", "pcx", "png", "svg", "tif", "txt",
     };
     char lc_filetype[4] = {0};
@@ -671,7 +703,7 @@ static void set_extension(char *file, const char *filetype) {
 
 /* Whether `filetype` is raster type */
 static int is_raster(const char *filetype, const int no_png) {
-    static const char *raster_filetypes[] = {
+    static const char raster_filetypes[][4] = {
         "bmp", "gif", "pcx", "png", "tif",
     };
     int i;
@@ -696,7 +728,7 @@ static int is_raster(const char *filetype, const int no_png) {
 }
 
 /* Helper for `validate_scalexdimdp()` to search for units, returning -2 on error, -1 if not found, else index */
-static int validate_units(char *buf, const char *units[], int units_size) {
+static int validate_units(char *buf, const char units[][5], int units_size) {
     int i;
     char *unit;
 
@@ -718,8 +750,8 @@ static int validate_units(char *buf, const char *units[], int units_size) {
 
 /* Parse and validate argument "xdim[,resolution]" to "--scalexdimdp" */
 static int validate_scalexdimdp(const char *optarg, float *p_x_dim_mm, float *p_dpmm) {
-    static const char *x_units[] = { "mm", "in" };
-    static const char *r_units[] = { "dpmm", "dpi" };
+    static const char x_units[][5] = { "mm", "in" };
+    static const char r_units[][5] = { "dpmm", "dpi" };
     char x_buf[7 + 1 + 4 + 1] = {0}; /* Allow for 7 digits + dot + 4-char unit + NUL */
     char r_buf[7 + 1 + 4 + 1] = {0}; /* As above */
     int units_i; /* For `validate_units()` */
@@ -748,7 +780,7 @@ static int validate_scalexdimdp(const char *optarg, float *p_x_dim_mm, float *p_
         fprintf(stderr, "Error 177: scalexdimdp X-dim units must occur at end\n");
         return 0;
     }
-    if (!validate_float(x_buf, p_x_dim_mm, errbuf)) {
+    if (!validate_float(x_buf, 0 /*allow_neg*/, p_x_dim_mm, errbuf)) {
         fprintf(stderr, "Error 178: scalexdimdp X-dim invalid floating point (%s)\n", errbuf);
         return 0;
     }
@@ -761,7 +793,7 @@ static int validate_scalexdimdp(const char *optarg, float *p_x_dim_mm, float *p_
             fprintf(stderr, "Error 179: scalexdimdp resolution units must occur at end\n");
             return 0;
         }
-        if (!validate_float(r_buf, p_dpmm, errbuf)) {
+        if (!validate_float(r_buf, 0 /*allow_neg*/, p_dpmm, errbuf)) {
             fprintf(stderr, "Error 180: scalexdimdp resolution invalid floating point (%s)\n", errbuf);
             return 0;
         }
@@ -1375,7 +1407,7 @@ static int do_exit(int error_number) {
     return error_number; /* Not reached */
 }
 
-typedef struct { char *arg; int opt; } arg_opt;
+typedef struct { const char *arg; int opt; } arg_opt;
 
 int main(int argc, char **argv) {
     struct zint_symbol *my_symbol;
@@ -1429,7 +1461,8 @@ int main(int argc, char **argv) {
     while (1) {
         enum options {
             OPT_ADDONGAP = 128, OPT_BATCH, OPT_BINARY, OPT_BG, OPT_BIND, OPT_BIND_TOP, OPT_BOLD, OPT_BORDER, OPT_BOX,
-            OPT_CMYK, OPT_COLS, OPT_COMPLIANTHEIGHT, OPT_DIRECT, OPT_DMRE, OPT_DOTSIZE, OPT_DOTTY, OPT_DUMP,
+            OPT_CMYK, OPT_COLS, OPT_COMPLIANTHEIGHT,
+            OPT_DIRECT, OPT_DMISO144, OPT_DMRE, OPT_DOTSIZE, OPT_DOTTY, OPT_DUMP,
             OPT_ECI, OPT_EMBEDFONT, OPT_ESC, OPT_EXTRAESC, OPT_FAST, OPT_FG, OPT_FILETYPE, OPT_FULLMULTIBYTE,
             OPT_GS1, OPT_GS1NOCHECK, OPT_GS1PARENS, OPT_GSSEP, OPT_GUARDDESCENT, OPT_GUARDWHITESPACE,
             OPT_HEIGHT, OPT_HEIGHTPERROW, OPT_INIT, OPT_MIRROR, OPT_MASK, OPT_MODE,
@@ -1457,6 +1490,7 @@ int main(int argc, char **argv) {
             {"compliantheight", 0, NULL, OPT_COMPLIANTHEIGHT},
             {"data", 1, NULL, 'd'},
             {"direct", 0, NULL, OPT_DIRECT},
+            {"dmiso144", 0, NULL, OPT_DMISO144},
             {"dmre", 0, NULL, OPT_DMRE},
             {"dotsize", 1, NULL, OPT_DOTSIZE},
             {"dotty", 0, NULL, OPT_DOTTY},
@@ -1602,14 +1636,17 @@ int main(int argc, char **argv) {
             case OPT_DIRECT:
                 my_symbol->output_options |= BARCODE_STDOUT;
                 break;
+            case OPT_DMISO144:
+                my_symbol->option_3 |= DM_ISO_144;
+                break;
             case OPT_DMRE:
                 /* Square overwrites DMRE */
-                if (my_symbol->option_3 != DM_SQUARE) {
-                    my_symbol->option_3 = DM_DMRE;
+                if ((my_symbol->option_3 & 0x7F) != DM_SQUARE) {
+                    my_symbol->option_3 = DM_DMRE | (my_symbol->option_3 & ~0x7F);
                 }
                 break;
             case OPT_DOTSIZE:
-                if (!validate_float(optarg, &float_opt, errbuf)) {
+                if (!validate_float(optarg, 0 /*allow_neg*/, &float_opt, errbuf)) {
                     fprintf(stderr, "Error 181: Invalid dot radius floating point (%s)\n", errbuf);
                     return do_exit(ZINT_ERROR_INVALID_OPTION);
                 }
@@ -1686,7 +1723,7 @@ int main(int argc, char **argv) {
                 my_symbol->output_options |= GS1_GS_SEPARATOR;
                 break;
             case OPT_GUARDDESCENT:
-                if (!validate_float(optarg, &float_opt, errbuf)) {
+                if (!validate_float(optarg, 0 /*allow_neg*/, &float_opt, errbuf)) {
                     fprintf(stderr, "Error 182: Invalid guard bar descent floating point (%s)\n", errbuf);
                     return do_exit(ZINT_ERROR_INVALID_OPTION);
                 }
@@ -1703,7 +1740,7 @@ int main(int argc, char **argv) {
                 my_symbol->output_options |= EANUPC_GUARD_WHITESPACE;
                 break;
             case OPT_HEIGHT:
-                if (!validate_float(optarg, &float_opt, errbuf)) {
+                if (!validate_float(optarg, 0 /*allow_neg*/, &float_opt, errbuf)) {
                     fprintf(stderr, "Error 183: Invalid symbol height floating point (%s)\n", errbuf);
                     return do_exit(ZINT_ERROR_INVALID_OPTION);
                 }
@@ -1766,7 +1803,9 @@ int main(int argc, char **argv) {
                 if (strlen(optarg) <= 127) {
                     strcpy(my_symbol->primary, optarg);
                 } else {
-                    fprintf(stderr, "Warning 115: Primary data string too long (127 character maximum), ignoring\n");
+                    strncpy(my_symbol->primary, optarg, 127);
+                    fprintf(stderr,
+                            "Warning 115: Primary data string too long (127 character maximum), truncating\n");
                     fflush(stderr);
                     warn_number = ZINT_WARN_INVALID_OPTION;
                 }
@@ -1781,13 +1820,11 @@ int main(int argc, char **argv) {
                     return do_exit(ZINT_ERROR_INVALID_OPTION);
                 }
                 switch (val) {
-                    case 90: rotate_angle = 90;
-                        break;
-                    case 180: rotate_angle = 180;
-                        break;
-                    case 270: rotate_angle = 270;
-                        break;
-                    case 0: rotate_angle = 0;
+                    case 0:
+                    case 90:
+                    case 180:
+                    case 270:
+                        rotate_angle = val;
                         break;
                     default:
                         fprintf(stderr,
@@ -1811,7 +1848,7 @@ int main(int argc, char **argv) {
                 }
                 break;
             case OPT_SCALE:
-                if (!validate_float(optarg, &float_opt, errbuf)) {
+                if (!validate_float(optarg, 0 /*allow_neg*/, &float_opt, errbuf)) {
                     fprintf(stderr, "Error 184: Invalid scale floating point (%s)\n", errbuf);
                     return do_exit(ZINT_ERROR_INVALID_OPTION);
                 }
@@ -1829,11 +1866,11 @@ int main(int argc, char **argv) {
                 }
                 if (x_dim_mm > 10.0f || dpmm > 1000.0f) {
                     if (x_dim_mm > 10.0f) {
-                        fprintf(stderr,
-                            "Warning 185: scalexdimdp X-dim (%g) out of range (> 10), ignoring\n", x_dim_mm);
+                        fprintf(stderr, "Warning 185: scalexdimdp X-dim (%g) out of range (> 10), ignoring\n",
+                                x_dim_mm);
                     } else {
-                        fprintf(stderr,
-                            "Warning 186: scalexdimdp resolution (%g) out of range (> 1000), ignoring\n", dpmm);
+                        fprintf(stderr, "Warning 186: scalexdimdp resolution (%g) out of range (> 1000), ignoring\n",
+                                dpmm);
                     }
                     fflush(stderr);
                     warn_number = ZINT_WARN_INVALID_OPTION;
@@ -1913,7 +1950,7 @@ int main(int argc, char **argv) {
                 my_symbol->output_options |= SMALL_TEXT;
                 break;
             case OPT_SQUARE:
-                my_symbol->option_3 = DM_SQUARE;
+                my_symbol->option_3 = DM_SQUARE | (my_symbol->option_3 & ~0x7F);
                 break;
             case OPT_STRUCTAPP:
                 memset(&my_symbol->structapp, 0, sizeof(my_symbol->structapp));
@@ -1922,14 +1959,15 @@ int main(int argc, char **argv) {
                 }
                 break;
             case OPT_TEXTGAP:
-                if (!validate_float(optarg, &float_opt, errbuf)) {
+                if (!validate_float(optarg, 1 /*allow_neg*/, &float_opt, errbuf)) {
                     fprintf(stderr, "Error 194: Invalid text gap floating point (%s)\n", errbuf);
                     return do_exit(ZINT_ERROR_INVALID_OPTION);
                 }
-                if (float_opt >= 0.0f && float_opt <= 10.0f) {
+                if (float_opt >= -5.0f && float_opt <= 10.0f) {
                     my_symbol->text_gap = float_opt;
                 } else {
-                    fprintf(stderr, "Warning 195: Text gap '%g' out of range (0 to 10), ignoring\n", float_opt);
+                    fprintf(stderr, "Warning 195: Text gap '%g' out of range (-5 to 10), ignoring\n",
+                            float_opt);
                     fflush(stderr);
                     warn_number = ZINT_WARN_INVALID_OPTION;
                 }
@@ -2045,7 +2083,19 @@ int main(int argc, char **argv) {
 
             case '?':
                 if (optopt) {
-                    fprintf(stderr, "Error 109: option '%s' requires an argument\n", argv[optind - 1]);
+                    for (i = 0; i < ARRAY_SIZE(long_options) && long_options[i].val != optopt; i++);
+                    if (i == ARRAY_SIZE(long_options)) { /* Shouldn't happen */
+                        fprintf(stderr, "Error 125: ?? unknown optopt '%d'\n", optopt); /* Not reached */
+                        return do_exit(ZINT_ERROR_ENCODING_PROBLEM);
+                    }
+                    if (long_options[i].has_arg) {
+                        fprintf(stderr, "Error 109: option '%s' requires an argument\n", argv[optind - 1]);
+                    } else {
+                        const char *eqs = strchr(argv[optind - 1], '=');
+                        const int optlen = eqs ? (int) (eqs - argv[optind - 1]) : (int) strlen(argv[optind - 1]);
+                        fprintf(stderr, "Error 126: option '%.*s' does not take an argument\n", optlen,
+                                argv[optind - 1]);
+                    }
                 } else {
                     fprintf(stderr, "Error 101: unknown option '%s'\n", argv[optind - 1]);
                 }
